@@ -47,8 +47,10 @@ export default function RecorderComponent() {
   // 4. Recording & Review States
   const [recordingState, setRecordingState] = useState<'idle' | 'countdown' | 'recording' | 'paused' | 'review'>('idle');
   const [countdown, setCountdown] = useState<number>(3);
-  const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
+  const [recordedUrlHD, setRecordedUrlHD] = useState<string | null>(null);
+  const [recordedUrlSD, setRecordedUrlSD] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState<number>(0);
+  const [showDownloadMenu, setShowDownloadMenu] = useState<boolean>(false);
 
 
   // Keep a ref in sync so the animation loop can read it without triggering re-mounts
@@ -65,8 +67,10 @@ export default function RecorderComponent() {
   const canvas2DRef = useRef<HTMLCanvasElement>(null);
   const canvas3DRef = useRef<HTMLCanvasElement>(null);
   const threeRendererRef = useRef<ThreeAvatarRenderer | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
+  const mediaRecorderRefHD = useRef<MediaRecorder | null>(null);
+  const mediaRecorderRefSD = useRef<MediaRecorder | null>(null);
+  const recordedChunksRefHD = useRef<Blob[]>([]);
+  const recordedChunksRefSD = useRef<Blob[]>([]);
   const animationFrameIdRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -79,7 +83,34 @@ export default function RecorderComponent() {
   // 7. Initialize Face Landmarker Hook
   const { landmarkerRef, isLoading: isLandmarkerLoading, error: landmarkerError, ready: isLandmarkerReady } = useFaceLandmarker();
 
+  // LERP Smoothing Pipeline Refs
+  const smoothedCxRef = useRef<number | null>(null);
+  const smoothedCyRef = useRef<number | null>(null);
+  const smoothedScaleRef = useRef<number | null>(null);
+  const smoothedRotationRef = useRef<number | null>(null);
 
+  // Preload graphics assets and patch console.error to suppress WASM errors on mount
+  useEffect(() => {
+    // Suppress MediaPipe/TensorFlow WASM delegate initialization logs which trigger Next.js error overlays
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+      if (typeof args[0] === 'string' && (
+        args[0].includes('Created TensorFlow Lite XNNPACK delegate') ||
+        args[0].includes('Wasm')
+      )) {
+        return; // Ignore
+      }
+      originalConsoleError.apply(console, args);
+    };
+
+    const { avatarLoader } = require('../utils/avatarRenderer');
+    avatarLoader.preloadAll();
+    
+    return () => {
+      // Restore on unmount
+      console.error = originalConsoleError;
+    };
+  }, []);
 
   // Enumerate Devices
   useEffect(() => {
@@ -231,6 +262,23 @@ export default function RecorderComponent() {
       }
 
       const targetSize = ASPECT_RATIOS[aspectRatio];
+      const videoRatio = video.videoWidth / video.videoHeight;
+      const canvasRatio = targetSize.width / targetSize.height;
+      
+      let drawW = targetSize.width;
+      let drawH = targetSize.height;
+      let offsetX = 0;
+      let offsetY = 0;
+
+      if (videoRatio > canvasRatio) {
+        // Video is wider, crop horizontal margins
+        drawW = targetSize.height * videoRatio;
+        offsetX = -(drawW - targetSize.width) / 2;
+      } else {
+        // Video is taller, crop vertical margins
+        drawH = targetSize.width / videoRatio;
+        offsetY = -(drawH - targetSize.height) / 2;
+      }
 
       // 1. Process 2D Canvas if it exists
       if (canvas2D) {
@@ -248,25 +296,7 @@ export default function RecorderComponent() {
             // Mirror effect for natural webcam preview
             ctx2D.translate(targetSize.width, 0);
             ctx2D.scale(-1, 1);
-
-            const videoRatio = video.videoWidth / video.videoHeight;
-            const canvasRatio = targetSize.width / targetSize.height;
-            
-            let drawW = targetSize.width;
-            let drawH = targetSize.height;
-            let offsetX = 0;
-            let offsetY = 0;
-
-            if (videoRatio > canvasRatio) {
-              // Video is wider, crop horizontal margins
-              drawW = targetSize.height * videoRatio;
-              offsetX = -(drawW - targetSize.width) / 2;
-            } else {
-              // Video is taller, crop vertical margins
-              drawH = targetSize.width / videoRatio;
-              offsetY = -(drawH - targetSize.height) / 2;
-            }
-
+            // Draw cropped camera feed
             ctx2D.drawImage(video, offsetX, offsetY, drawW, drawH);
             ctx2D.restore();
           };
@@ -294,30 +324,59 @@ export default function RecorderComponent() {
                   const eyeR = landmarks[263];
                   const forehead = landmarks[10];
                   const chin = landmarks[152];
+                  const cheekL = landmarks[234];
+                  const cheekR = landmarks[454];
 
-                  if (eyeL && eyeR && forehead && chin) {
-                    const cx = ((1 - eyeL.x) + (1 - eyeR.x)) / 2 * targetSize.width;
-                    const cy = ((forehead.y + chin.y) / 2) * targetSize.height;
-                    const facePixelHeight = (chin.y - forehead.y) * targetSize.height;
-                    const scaleVal = (facePixelHeight / 2) / 85;
+                  if (eyeL && eyeR && forehead && chin && cheekL && cheekR) {
+                    // Project normalized coordinates onto cropped canvas viewport
+                    const cx = offsetX + ((1 - eyeL.x) + (1 - eyeR.x)) / 2 * drawW;
+                    const cy = offsetY + (forehead.y + chin.y) / 2 * drawH;
+                    
+                    // Projected cheek coordinates for exact Euclidean distance on screen
+                    const xCheekL = offsetX + (1 - cheekL.x) * drawW;
+                    const xCheekR = offsetX + (1 - cheekR.x) * drawW;
+                    const yCheekL = offsetY + cheekL.y * drawH;
+                    const yCheekR = offsetY + cheekR.y * drawH;
+                    
+                    const faceWidth = Math.sqrt((xCheekL - xCheekR)**2 + (yCheekL - yCheekR)**2);
+                    // Use a 2.6x cheek width factor to cover the whole head, ears and hair completely
+                    const scaleVal = (faceWidth * 2.6) / 300; 
 
                     let rollAngle = 0;
                     {
-                      const lx = (1 - eyeL.x) * targetSize.width;
-                      const ly = eyeL.y * targetSize.height;
-                      const rx = (1 - eyeR.x) * targetSize.width;
-                      const ry = eyeR.y * targetSize.height;
+                      const lx = offsetX + (1 - eyeL.x) * drawW;
+                      const ly = offsetY + eyeL.y * drawH;
+                      const rx = offsetX + (1 - eyeR.x) * drawW;
+                      const ry = offsetY + eyeR.y * drawH;
                       rollAngle = Math.atan2(ly - ry, lx - rx);
+                    }
+
+                    // LERP Smoothing Pipeline (alpha = 0.25)
+                    const alpha = 0.25;
+                    if (smoothedCxRef.current === null || smoothedCyRef.current === null || smoothedScaleRef.current === null || smoothedRotationRef.current === null) {
+                      smoothedCxRef.current = cx;
+                      smoothedCyRef.current = cy;
+                      smoothedScaleRef.current = scaleVal;
+                      smoothedRotationRef.current = rollAngle;
+                    } else {
+                      smoothedCxRef.current += (cx - smoothedCxRef.current) * alpha;
+                      smoothedCyRef.current += (cy - smoothedCyRef.current) * alpha;
+                      smoothedScaleRef.current += (scaleVal - smoothedScaleRef.current) * alpha;
+
+                      let diff = rollAngle - smoothedRotationRef.current;
+                      while (diff < -Math.PI) diff += Math.PI * 2;
+                      while (diff > Math.PI) diff -= Math.PI * 2;
+                      smoothedRotationRef.current += diff * alpha;
                     }
 
                     const bsMap: Record<string, number> = {};
                     blendshapes.forEach(b => { bsMap[b.categoryName] = b.score; });
 
                     faceData = {
-                      cx,
-                      cy,
-                      scale: scaleVal,
-                      rotation: rollAngle,
+                      cx: smoothedCxRef.current!,
+                      cy: smoothedCyRef.current!,
+                      scale: smoothedScaleRef.current!,
+                      rotation: smoothedRotationRef.current!,
                       isLeftEyeOpen: (bsMap['eyeBlinkLeft'] || 0) < 0.35,
                       isRightEyeOpen: (bsMap['eyeBlinkRight'] || 0) < 0.35,
                       mouthOpenRatio: bsMap['jawOpen'] || 0,
@@ -330,6 +389,12 @@ export default function RecorderComponent() {
                     threeRendererRef.current.update(landmarks, blendshapes);
                   }
                 } else {
+                  // Reset LERP refs when tracking is lost so it snaps cleanly next time
+                  smoothedCxRef.current = null;
+                  smoothedCyRef.current = null;
+                  smoothedScaleRef.current = null;
+                  smoothedRotationRef.current = null;
+
                   if (avatarMode === '3d' && avatarType !== 'none' && threeRendererRef.current) {
                     threeRendererRef.current.updateBackgroundTexture(canvas2D);
                     threeRendererRef.current.update([], []);
@@ -404,13 +469,13 @@ export default function RecorderComponent() {
     }, 1000);
   };
 
-  // Start recording actual media
+  // Start recording actual media (runs concurrent HD and SD MediaRecorders)
   const startRecording = () => {
     if (!stream) return;
     
-    recordedChunksRef.current = [];
+    recordedChunksRefHD.current = [];
+    recordedChunksRefSD.current = [];
     
-    // Choose active canvas stream based on avatar selection
     const recordCanvas = (avatarMode === '3d' && avatarType !== 'none') 
       ? canvas3DRef.current 
       : canvas2DRef.current;
@@ -428,61 +493,87 @@ export default function RecorderComponent() {
       // 2. Fetch mic audio track
       const audioTrack = stream.getAudioTracks()[0];
 
-      // 3. Assemble composite stream
-      const compositeStream = new MediaStream();
-      if (videoTrack) compositeStream.addTrack(videoTrack);
-      if (audioTrack) compositeStream.addTrack(audioTrack);
+      // 3. Assemble composite streams
+      const compositeStreamHD = new MediaStream();
+      if (videoTrack) compositeStreamHD.addTrack(videoTrack.clone());
+      if (audioTrack) compositeStreamHD.addTrack(audioTrack);
+
+      const compositeStreamSD = new MediaStream();
+      if (videoTrack) compositeStreamSD.addTrack(videoTrack.clone());
+      if (audioTrack) compositeStreamSD.addTrack(audioTrack);
 
       // 4. Find supported mimeType
       const mimeType = getSupportedMimeType();
-      const options = mimeType ? { mimeType } : undefined;
-      console.log('Initializing MediaRecorder with mimeType:', mimeType || 'default', 'options:', options);
       
-      const mediaRecorder = new MediaRecorder(compositeStream, options);
+      const optionsHD = {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 8000000 // 8 Mbps for High Definition
+      };
+
+      const optionsSD = {
+        mimeType: mimeType || undefined,
+        videoBitsPerSecond: 2000000 // 2 Mbps for Standard Definition
+      };
+
+      console.log('Initializing Dual MediaRecorders. Mime:', mimeType || 'default');
+      const mediaRecorderHD = new MediaRecorder(compositeStreamHD, optionsHD);
+      const mediaRecorderSD = new MediaRecorder(compositeStreamSD, optionsSD);
       
-      mediaRecorder.ondataavailable = (event) => {
+      // Setup data listeners
+      mediaRecorderHD.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
-          console.log('MediaRecorder chunk received, size:', event.data.size, 'type:', event.data.type);
-          recordedChunksRef.current.push(event.data);
+          recordedChunksRefHD.current.push(event.data);
         }
       };
 
-      mediaRecorder.onerror = (err) => {
-        console.error('MediaRecorder runtime error:', err);
+      mediaRecorderSD.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRefSD.current.push(event.data);
+        }
       };
 
-      mediaRecorder.onstop = () => {
-        const actualType = mediaRecorder.mimeType || mimeType || 'video/webm';
-        const blob = new Blob(recordedChunksRef.current, { type: actualType });
-        console.log('MediaRecorder stopped. Total chunks:', recordedChunksRef.current.length, 'Blob size:', blob.size, 'MIME:', actualType);
-        
+      mediaRecorderHD.onerror = (err) => {
+        console.error('HD MediaRecorder error:', err);
+      };
+      mediaRecorderSD.onerror = (err) => {
+        console.error('SD MediaRecorder error:', err);
+      };
+
+      // Set stop handling
+      mediaRecorderHD.onstop = () => {
+        const actualType = mediaRecorderHD.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(recordedChunksRefHD.current, { type: actualType });
         const url = URL.createObjectURL(blob);
-        setRecordedUrl(url);
+        setRecordedUrlHD(url);
         setRecordingStateSynced('review');
-        
+
         // Stop canvas capture stream track to release memory
         if (videoTrack) {
           try {
             videoTrack.stop();
-            console.log('Canvas capture video track stopped.');
-          } catch (e) {
-            console.error('Error stopping video track:', e);
-          }
-        }
-
-        // Clear active recording timer
-        if (recordingTimerRef.current) {
-          clearInterval(recordingTimerRef.current);
+          } catch (e) {}
         }
       };
 
-      mediaRecorderRef.current = mediaRecorder;
-      recordedChunksRef.current = [];
+      mediaRecorderSD.onstop = () => {
+        const actualType = mediaRecorderSD.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(recordedChunksRefSD.current, { type: actualType });
+        const url = URL.createObjectURL(blob);
+        setRecordedUrlSD(url);
+      };
+
+      // Clear active recording timer
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+
+      mediaRecorderRefHD.current = mediaRecorderHD;
+      mediaRecorderRefSD.current = mediaRecorderSD;
       
-      // Start recording. Calling start() without timeslice forces the browser to
-      // package the recording reliably into a single high-quality chunk upon stop().
-      mediaRecorder.start(); 
-      console.log('MediaRecorder started successfully.');
+      // Start both recorders
+      mediaRecorderHD.start(); 
+      mediaRecorderSD.start(); 
+      console.log('Dual MediaRecorders started successfully.');
 
       setRecordingStateSynced('recording');
       setRecordingTime(0);
@@ -493,7 +584,7 @@ export default function RecorderComponent() {
       }, 1000);
 
     } catch (e) {
-      console.error('Failed to start recording:', e);
+      console.error('Failed to start dual recording:', e);
       setRecordingStateSynced('idle');
     }
   };
@@ -517,8 +608,9 @@ export default function RecorderComponent() {
 
   // Pause recording
   const pauseRecording = () => {
-    if (mediaRecorderRef.current && recordingState === 'recording') {
-      mediaRecorderRef.current.pause();
+    if (mediaRecorderRefHD.current && recordingState === 'recording') {
+      mediaRecorderRefHD.current.pause();
+      mediaRecorderRefSD.current?.pause();
       setRecordingStateSynced('paused');
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
@@ -528,8 +620,9 @@ export default function RecorderComponent() {
 
   // Resume recording
   const resumeRecording = () => {
-    if (mediaRecorderRef.current && recordingState === 'paused') {
-      mediaRecorderRef.current.resume();
+    if (mediaRecorderRefHD.current && recordingState === 'paused') {
+      mediaRecorderRefHD.current.resume();
+      mediaRecorderRefSD.current?.resume();
       setRecordingStateSynced('recording');
       recordingTimerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
@@ -539,41 +632,50 @@ export default function RecorderComponent() {
 
   // Stop recording
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.requestData();
-      } catch (e) {}
-      mediaRecorderRef.current.stop();
+    setRecordingStateSynced('review');
+    if (mediaRecorderRefHD.current && mediaRecorderRefHD.current.state !== 'inactive') {
+      try { mediaRecorderRefHD.current.requestData(); } catch (e) {}
+      mediaRecorderRefHD.current.stop();
+    }
+    if (mediaRecorderRefSD.current && mediaRecorderRefSD.current.state !== 'inactive') {
+      try { mediaRecorderRefSD.current.requestData(); } catch (e) {}
+      mediaRecorderRefSD.current.stop();
     }
   };
 
   // Retake recording
   const handleRetake = () => {
-    // Move to idle first so the canvas loop restarts before revoking the URL
     setRecordingStateSynced('idle');
     setRecordingTime(0);
-    // Revoke URL after a short delay so the video element finishes unloading
+    setShowDownloadMenu(false);
     setTimeout(() => {
-      if (recordedUrl) {
-        URL.revokeObjectURL(recordedUrl);
+      if (recordedUrlHD) {
+        URL.revokeObjectURL(recordedUrlHD);
       }
-      setRecordedUrl(null);
+      if (recordedUrlSD) {
+        URL.revokeObjectURL(recordedUrlSD);
+      }
+      setRecordedUrlHD(null);
+      setRecordedUrlSD(null);
     }, 100);
   };
 
   // Download recorded video (force MP4 container output file)
-  const handleDownload = () => {
-    if (!recordedUrl) return;
+  const handleDownload = (quality: 'hd' | 'sd') => {
+    const url = quality === 'hd' ? recordedUrlHD : recordedUrlSD;
+    if (!url) return;
 
     const timeString = new Date().toISOString().split('T')[0];
-    const fileName = `SpeakGarden_${aspectRatio.replace(':', 'x')}_${timeString}.mp4`;
+    const qualityLabel = quality === 'hd' ? 'HD' : 'SD';
+    const fileName = `SpeakGarden_${aspectRatio.replace(':', 'x')}_${qualityLabel}_${timeString}.mp4`;
     
     const a = document.createElement('a');
-    a.href = recordedUrl;
+    a.href = url;
     a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setShowDownloadMenu(false);
   };
 
   // Helper formatting seconds to MM:SS
@@ -608,15 +710,25 @@ export default function RecorderComponent() {
       {/* Header */}
       <header className="w-full max-w-6xl mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-2xl shadow-lg shadow-indigo-500/25">
-            <Video className="w-6 h-6 text-white" />
+          <div 
+            className="p-3 rounded-2xl shadow-md flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}
+          >
+            <Video className="w-6 h-6" style={{ color: '#ffffff' }} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-200 to-purple-300">
-              FaceCraft Recorder
+            <h1 
+              className="text-3xl font-extrabold tracking-tight"
+              style={{ 
+                background: 'linear-gradient(135deg, #1e1b4b 0%, #4f46e5 50%, #7c3aed 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent'
+              }}
+            >
+              Satrn<span style={{ color: '#6366f1', WebkitTextFillColor: '#6366f1' }}>.io</span>
             </h1>
-            <p className="text-xs text-var(--color-text-muted)">
-              Create portrait videos with custom dimensions and cartoon animal filters
+            <p className="text-xs font-medium text-slate-500 mt-0.5">
+              AI Portrait & 3D Avatar Video Recorder
             </p>
           </div>
         </div>
@@ -646,7 +758,7 @@ export default function RecorderComponent() {
           
           {/* Responsive Camera Frame Container */}
           <div 
-            className="w-full relative glass-panel overflow-hidden flex items-center justify-center border-indigo-500/20 transition-all duration-300"
+            className="w-full relative z-0 glass-panel overflow-hidden flex items-center justify-center border-indigo-500/20 transition-all duration-300"
             style={{ 
               aspectRatio: ASPECT_RATIOS[aspectRatio].ratio,
               maxHeight: '62vh',
@@ -687,11 +799,11 @@ export default function RecorderComponent() {
             )}
 
             {/* Overlay: Active Review Overlay */}
-            {recordingState === 'review' && recordedUrl && (
+            {recordingState === 'review' && (recordedUrlHD || recordedUrlSD) && (
               <div className="absolute inset-0 bg-black z-30 flex items-center justify-center">
                 <video 
-                  key={recordedUrl}
-                  src={recordedUrl} 
+                  key={recordedUrlHD || recordedUrlSD || 'review'}
+                  src={recordedUrlHD || recordedUrlSD || undefined} 
                   controls 
                   className="w-full h-full object-contain"
                   autoPlay
@@ -735,7 +847,7 @@ export default function RecorderComponent() {
           </div>
 
           {/* Action Recorder Console & Review buttons Card */}
-          <div className="glass-panel p-5 w-full flex items-center justify-center min-h-[96px]">
+          <div className="glass-panel p-5 w-full flex items-center justify-center min-h-[96px] relative z-20">
             {recordingState === 'review' && (
               <div className="flex gap-4 w-full justify-center max-w-sm">
                 <button 
@@ -745,13 +857,44 @@ export default function RecorderComponent() {
                   <RotateCcw className="w-4 h-4 text-slate-500" />
                   Retake
                 </button>
-                <button 
-                  onClick={handleDownload}
-                  className="flex-1 py-3 px-5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition"
-                >
-                  <Download className="w-4 h-4" />
-                  Download MP4
-                </button>
+                <div className="relative flex-1 flex">
+                  <button 
+                    onClick={() => handleDownload('hd')}
+                    className="flex-1 py-3 px-4 rounded-l-xl bg-gradient-to-r from-indigo-500 to-indigo-650 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/20 transition"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download HD
+                  </button>
+                  <button 
+                    onClick={() => setShowDownloadMenu(prev => !prev)}
+                    className="py-3 px-3 rounded-r-xl bg-indigo-700 hover:bg-indigo-800 text-white border-l border-indigo-600 shadow-lg transition flex items-center justify-center"
+                    title="Choose download quality"
+                  >
+                    <span className="text-[10px] font-bold">SD</span>
+                  </button>
+                  
+                  {showDownloadMenu && (
+                    <div 
+                      className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 flex flex-col"
+                      style={{ backgroundColor: '#ffffff' }}
+                    >
+                      <button
+                        onClick={() => handleDownload('hd')}
+                        className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        HD Quality (8 Mbps)
+                      </button>
+                      <button
+                        onClick={() => handleDownload('sd')}
+                        className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        SD Quality (2 Mbps)
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1000,6 +1143,8 @@ export default function RecorderComponent() {
                   {microphones.length === 0 && <option value="">No microphones found</option>}
                 </select>
               </div>
+
+
             </div>
           </div>
 

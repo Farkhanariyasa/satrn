@@ -15,8 +15,8 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "FaceCraft Recorder | Custom Dimension Avatar Camera",
-  description: "A premium video recorder with customizable recording dimensions (9:16 portrait, 1:1 square, etc.) and real-time 2D/3D cartoon animal filters using browser face landmark tracking.",
+  title: "Satrn.io | AI Portrait & 3D Avatar Video Studio",
+  description: "A premium video recorder with customizable portrait dimensions and real-time 2D/3D cartoon animal filters using browser face landmark tracking.",
   keywords: ["video recorder", "portrait video", "avatar camera", "cartoon filters", "ready player me", "mediapipe", "threejs", "9:16 recorder"],
   authors: [{ name: "SpeakGarden" }],
 };
