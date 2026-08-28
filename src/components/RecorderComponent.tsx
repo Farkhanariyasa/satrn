@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
 import { drawBackground, drawCartoonBody, draw2DAvatar, AvatarType, BackgroundType, FaceData } from '../utils/avatarRenderer';
-import { ThreeAvatarRenderer } from '../utils/threeAvatarRenderer';
 
 type AspectRatio = '9:16' | '1:1' | '16:9' | '4:3';
 
@@ -17,11 +16,6 @@ const ASPECT_RATIOS: Record<AspectRatio, { width: number; height: number; label:
   '16:9': { width: 1280, height: 720, label: '16:9 (Landscape)', ratio: 16/9 },
   '4:3': { width: 960, height: 720, label: '4:3 (Classic)', ratio: 4/3 },
 };
-
-const DEFAULT_3D_AVATARS = [
-  { name: 'Cute Anime', url: 'https://models.readyplayer.me/64b025a12b7a42145e69e02c.glb' },
-  { name: 'Casual Guy', url: 'https://models.readyplayer.me/65646d0a7905f884fc5bdecc.glb' }
-];
 
 export default function RecorderComponent() {
   // 1. Device and Stream States
@@ -34,17 +28,9 @@ export default function RecorderComponent() {
   // 2. Control States
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16');
   const [avatarType, setAvatarType] = useState<AvatarType>('none');
-  const [avatarMode, setAvatarMode] = useState<'2d' | '3d'>('2d');
   const [backgroundType, setBackgroundType] = useState<BackgroundType>('camera');
   
-  // 3. 3D Avatar States
-  const [custom3DUrl, setCustom3DUrl] = useState<string>('');
-  const [active3DUrl, setActive3DUrl] = useState<string>(DEFAULT_3D_AVATARS[0].url);
-  const [threeLoaderProgress, setThreeLoaderProgress] = useState<number>(0);
-  const [isThreeModelLoading, setIsThreeModelLoading] = useState<boolean>(false);
-  const [threeError, setThreeError] = useState<string | null>(null);
-
-  // 4. Recording & Review States
+  // 3. Recording & Review States
   const [recordingState, setRecordingState] = useState<'idle' | 'countdown' | 'recording' | 'paused' | 'review'>('idle');
   const [countdown, setCountdown] = useState<number>(3);
   const [recordedUrlHD, setRecordedUrlHD] = useState<string | null>(null);
@@ -65,8 +51,6 @@ export default function RecorderComponent() {
   // 6. Refs
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvas2DRef = useRef<HTMLCanvasElement>(null);
-  const canvas3DRef = useRef<HTMLCanvasElement>(null);
-  const threeRendererRef = useRef<ThreeAvatarRenderer | null>(null);
   const mediaRecorderRefHD = useRef<MediaRecorder | null>(null);
   const mediaRecorderRefSD = useRef<MediaRecorder | null>(null);
   const recordedChunksRefHD = useRef<Blob[]>([]);
@@ -88,6 +72,7 @@ export default function RecorderComponent() {
   const smoothedCyRef = useRef<number | null>(null);
   const smoothedScaleRef = useRef<number | null>(null);
   const smoothedRotationRef = useRef<number | null>(null);
+  const smoothedMarRef = useRef<number | null>(null);
 
   // Preload graphics assets and patch console.error to suppress WASM errors on mount
   useEffect(() => {
@@ -213,39 +198,7 @@ export default function RecorderComponent() {
     }
   };
 
-  // Initialize and update 3D Avatar Renderer
-  useEffect(() => {
-    const canvas3D = canvas3DRef.current;
-    if (!canvas3D) return;
 
-    // Initialize 3D renderer if not present
-    if (!threeRendererRef.current) {
-      threeRendererRef.current = new ThreeAvatarRenderer(canvas3D);
-    }
-
-    const targetSize = ASPECT_RATIOS[aspectRatio];
-    threeRendererRef.current.resize(targetSize.width, targetSize.height);
-
-    // Load active model if needed
-    if (avatarMode === '3d' && avatarType !== 'none') {
-      setIsThreeModelLoading(true);
-      setThreeError(null);
-      threeRendererRef.current.loadAvatar(active3DUrl, (pct) => {
-        setThreeLoaderProgress(Math.round(pct));
-      })
-      .then(() => {
-        setIsThreeModelLoading(false);
-      })
-      .catch((err) => {
-        setIsThreeModelLoading(false);
-        setThreeError('Could not load 3D model. Make sure it is a valid public GLB URL.');
-      });
-    }
-
-    return () => {
-      // Don't fully destroy renderer on aspect ratio change, just resize it
-    };
-  }, [aspectRatio, avatarMode, avatarType, active3DUrl]);
 
   // Main canvas drawing and face landmark tracking loop
   useEffect(() => {
@@ -328,18 +281,30 @@ export default function RecorderComponent() {
                   const cheekR = landmarks[454];
 
                   if (eyeL && eyeR && forehead && chin && cheekL && cheekR) {
-                    // Project normalized coordinates onto cropped canvas viewport
+                    // Helper for 3D distance
+                    const dist = (p1: any, p2: any) => {
+                      if (!p1 || !p2) return 0;
+                      return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2 + (p1.z - p2.z) ** 2);
+                    };
+
+                    // 1. Calculate Eye Aspect Ratio (EAR) for blinking
+                    const leftEAR = dist(landmarks[159], landmarks[145]) / (dist(landmarks[33], landmarks[133]) || 1);
+                    const rightEAR = dist(landmarks[386], landmarks[374]) / (dist(landmarks[263], landmarks[362]) || 1);
+                    const avgEAR = (leftEAR + rightEAR) / 2;
+
+                    // 2. Calculate Mouth Aspect Ratio (MAR) for speech talking sync
+                    const rawMAR = dist(landmarks[13], landmarks[14]) / (dist(landmarks[61], landmarks[291]) || 1);
+
+                    // Project coordinates to cropped canvas viewport
                     const cx = offsetX + ((1 - eyeL.x) + (1 - eyeR.x)) / 2 * drawW;
                     const cy = offsetY + (forehead.y + chin.y) / 2 * drawH;
                     
-                    // Projected cheek coordinates for exact Euclidean distance on screen
                     const xCheekL = offsetX + (1 - cheekL.x) * drawW;
                     const xCheekR = offsetX + (1 - cheekR.x) * drawW;
                     const yCheekL = offsetY + cheekL.y * drawH;
                     const yCheekR = offsetY + cheekR.y * drawH;
                     
                     const faceWidth = Math.sqrt((xCheekL - xCheekR)**2 + (yCheekL - yCheekR)**2);
-                    // Use a 2.6x cheek width factor to cover the whole head, ears and hair completely
                     const scaleVal = (faceWidth * 2.6) / 300; 
 
                     let rollAngle = 0;
@@ -353,15 +318,17 @@ export default function RecorderComponent() {
 
                     // LERP Smoothing Pipeline (alpha = 0.25)
                     const alpha = 0.25;
-                    if (smoothedCxRef.current === null || smoothedCyRef.current === null || smoothedScaleRef.current === null || smoothedRotationRef.current === null) {
+                    if (smoothedCxRef.current === null || smoothedCyRef.current === null || smoothedScaleRef.current === null || smoothedRotationRef.current === null || smoothedMarRef.current === null) {
                       smoothedCxRef.current = cx;
                       smoothedCyRef.current = cy;
                       smoothedScaleRef.current = scaleVal;
                       smoothedRotationRef.current = rollAngle;
+                      smoothedMarRef.current = rawMAR;
                     } else {
                       smoothedCxRef.current += (cx - smoothedCxRef.current) * alpha;
                       smoothedCyRef.current += (cy - smoothedCyRef.current) * alpha;
                       smoothedScaleRef.current += (scaleVal - smoothedScaleRef.current) * alpha;
+                      smoothedMarRef.current += (rawMAR - smoothedMarRef.current) * alpha;
 
                       let diff = rollAngle - smoothedRotationRef.current;
                       while (diff < -Math.PI) diff += Math.PI * 2;
@@ -377,16 +344,13 @@ export default function RecorderComponent() {
                       cy: smoothedCyRef.current!,
                       scale: smoothedScaleRef.current!,
                       rotation: smoothedRotationRef.current!,
-                      isLeftEyeOpen: (bsMap['eyeBlinkLeft'] || 0) < 0.35,
-                      isRightEyeOpen: (bsMap['eyeBlinkRight'] || 0) < 0.35,
+                      isLeftEyeOpen: avgEAR >= 0.18,
+                      isRightEyeOpen: avgEAR >= 0.18,
                       mouthOpenRatio: bsMap['jawOpen'] || 0,
-                      smileIntensity: ((bsMap['mouthSmileLeft'] || 0) + (bsMap['mouthSmileRight'] || 0)) / 2
+                      smileIntensity: ((bsMap['mouthSmileLeft'] || 0) + (bsMap['mouthSmileRight'] || 0)) / 2,
+                      avgEAR: avgEAR,
+                      mar: smoothedMarRef.current!
                     };
-                  }
-
-                  if (avatarMode === '3d' && avatarType !== 'none' && threeRendererRef.current) {
-                    threeRendererRef.current.updateBackgroundTexture(canvas2D);
-                    threeRendererRef.current.update(landmarks, blendshapes);
                   }
                 } else {
                   // Reset LERP refs when tracking is lost so it snaps cleanly next time
@@ -394,11 +358,7 @@ export default function RecorderComponent() {
                   smoothedCyRef.current = null;
                   smoothedScaleRef.current = null;
                   smoothedRotationRef.current = null;
-
-                  if (avatarMode === '3d' && avatarType !== 'none' && threeRendererRef.current) {
-                    threeRendererRef.current.updateBackgroundTexture(canvas2D);
-                    threeRendererRef.current.update([], []);
-                  }
+                  smoothedMarRef.current = null;
                 }
               } catch (_) {
                 // Silently handle detection glitches
@@ -406,14 +366,12 @@ export default function RecorderComponent() {
             }
           }
 
-          // 4. Render 2D Cartoon Avatar elements if active
-          if (avatarMode === '2d' && avatarType !== 'none') {
+          // 3. Render 2D Cartoon Avatar elements if active
+          if (avatarType !== 'none') {
             if (faceData) {
-              // Only draw cartoon body if virtual background is active
               if (backgroundType !== 'camera') {
                 drawCartoonBody(ctx2D, faceData.cx, faceData.cy, faceData.scale, avatarType);
               }
-              // Draw face
               draw2DAvatar(ctx2D, avatarType, faceData);
             } else {
               ctx2D.fillStyle = 'rgba(255, 255, 255, 0.9)';
@@ -449,7 +407,7 @@ export default function RecorderComponent() {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
     };
-  }, [aspectRatio, avatarType, avatarMode, backgroundType]);
+  }, [aspectRatio, avatarType, backgroundType]);
 
   // Start countdown before recording
   const initiateRecording = () => {
@@ -476,9 +434,7 @@ export default function RecorderComponent() {
     recordedChunksRefHD.current = [];
     recordedChunksRefSD.current = [];
     
-    const recordCanvas = (avatarMode === '3d' && avatarType !== 'none') 
-      ? canvas3DRef.current 
-      : canvas2DRef.current;
+    const recordCanvas = canvas2DRef.current;
       
     if (!recordCanvas) {
       setRecordingStateSynced('idle');
@@ -685,25 +641,7 @@ export default function RecorderComponent() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Handle custom Ready Player Me URL loading
-  const handleLoadCustom3D = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!custom3DUrl.trim()) return;
-    
-    // Convert short/regular Ready Player Me subdomain URLs to raw .glb endpoint
-    // E.g. https://readyplayer.me/avatar-editor?id=64b025a12... -> models link
-    let formattedUrl = custom3DUrl.trim();
-    if (formattedUrl.includes('readyplayer.me') && !formattedUrl.endsWith('.glb')) {
-      // Try to extract avatar ID
-      const urlObj = new URL(formattedUrl);
-      const avatarId = urlObj.searchParams.get('id') || urlObj.pathname.split('/').pop();
-      if (avatarId && avatarId.length > 10) {
-        formattedUrl = `https://models.readyplayer.me/${avatarId}.glb`;
-      }
-    }
 
-    setActive3DUrl(formattedUrl);
-  };
 
   return (
     <div className="min-h-screen p-4 md:p-8 flex flex-col items-center">
@@ -728,7 +666,7 @@ export default function RecorderComponent() {
               Satrn<span style={{ color: '#6366f1', WebkitTextFillColor: '#6366f1' }}>.io</span>
             </h1>
             <p className="text-xs font-medium text-slate-500 mt-0.5">
-              AI Portrait & 3D Avatar Video Recorder
+              AI Portrait & Interactive Cartoon Avatar Recorder
             </p>
           </div>
         </div>
@@ -739,12 +677,6 @@ export default function RecorderComponent() {
             <div className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20">
               <Sparkles className="w-4.5 h-4.5 animate-spin" />
               <span>Downloading Face AI model...</span>
-            </div>
-          )}
-          {isThreeModelLoading && (
-            <div className="flex items-center gap-2 text-purple-400 bg-purple-500/10 px-3 py-1.5 rounded-full border border-purple-500/20">
-              <RefreshCw className="w-4.5 h-4.5 animate-spin" />
-              <span>Loading 3D Avatar ({threeLoaderProgress}%)</span>
             </div>
           )}
         </div>
@@ -779,14 +711,7 @@ export default function RecorderComponent() {
             <canvas 
               ref={canvas2DRef}
               className="w-full h-full object-contain"
-              style={{ display: (recordingState === 'review' || (avatarMode === '3d' && avatarType !== 'none')) ? 'none' : 'block' }}
-            />
-
-            {/* Canvas 3D (WebGL Three.js rendering) */}
-            <canvas 
-              ref={canvas3DRef}
-              className="w-full h-full object-contain"
-              style={{ display: (recordingState !== 'review' && avatarMode === '3d' && avatarType !== 'none') ? 'block' : 'none' }}
+              style={{ display: recordingState === 'review' ? 'none' : 'block' }}
             />
 
             {/* Overlay: Countdown Overlay */}
@@ -901,7 +826,7 @@ export default function RecorderComponent() {
             {recordingState === 'idle' && (
               <button
                 onClick={initiateRecording}
-                disabled={isLandmarkerLoading || (avatarMode === '3d' && isThreeModelLoading)}
+                disabled={isLandmarkerLoading}
                 className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 hover:scale-105 active:scale-95 disabled:bg-slate-350 disabled:text-slate-500 disabled:scale-100 flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all border-4 border-white"
                 title="Start Recording"
               >
@@ -997,104 +922,33 @@ export default function RecorderComponent() {
                 <Sparkles className="w-4 h-4 text-indigo-500" />
                 2. Cartoon Avatar Filters
               </h2>
-              
-              {/* 2D / 3D Mode Toggle */}
-              {avatarType !== 'none' && (
-                <div className="flex rounded-lg bg-slate-200 p-0.5 border border-slate-300 text-[10px] font-bold uppercase tracking-wider">
-                  <button
-                    onClick={() => setAvatarMode('2d')}
-                    className={`px-3 py-1 rounded-md transition ${avatarMode === '2d' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    2D Animals
-                  </button>
-                  <button
-                    onClick={() => setAvatarMode('3d')}
-                    className={`px-3 py-1 rounded-md transition ${avatarMode === '3d' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    3D Human
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* List of filters */}
-            {avatarMode === '2d' || avatarType === 'none' ? (
-              <div className="grid grid-cols-3 gap-2">
-                {(['none', 'bear', 'cat', 'panda', 'dog', 'rabbit'] as AvatarType[]).map((type) => {
-                  const active = avatarType === type;
-                  return (
-                    <button
-                      key={type}
-                      onClick={() => {
-                        setAvatarType(type);
-                        setAvatarMode('2d');
-                      }}
-                      className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-2 uppercase tracking-wide text-[10px] font-semibold transition ${
-                        active 
-                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700' 
-                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      {/* Stylized Emoji Previews */}
-                      <span className="text-2xl">
-                        {type === 'none' ? '👤' : type === 'bear' ? '🐻' : type === 'cat' ? '🐱' : type === 'panda' ? '🐼' : type === 'dog' ? '🐶' : '🐰'}
-                      </span>
-                      <span>{type === 'none' ? 'Raw Feed' : type}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              // 3D Avatar Selector Panel
-              <div className="flex flex-col gap-4">
-                <div className="grid grid-cols-2 gap-2">
-                  {DEFAULT_3D_AVATARS.map((avatar) => {
-                    const active = active3DUrl === avatar.url;
-                    return (
-                      <button
-                        key={avatar.name}
-                        onClick={() => {
-                          setAvatarType('bear'); // Trigger avatar state active (not raw)
-                          setAvatarMode('3d');
-                          setActive3DUrl(avatar.url);
-                        }}
-                        className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-1.5 transition ${
-                          active 
-                            ? 'border-indigo-500 bg-indigo-550 text-white shadow-md' 
-                            : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <span className="text-2xl">🤖</span>
-                        <span className="text-[10px] font-semibold uppercase">{avatar.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                
-                {/* Paste Ready Player Me .glb URL */}
-                <form onSubmit={handleLoadCustom3D} className="flex flex-col gap-2">
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">
-                    Paste custom Ready Player Me GLB URL
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="url"
-                      placeholder="https://models.readyplayer.me/avatar.glb"
-                      value={custom3DUrl}
-                      onChange={(e) => setCustom3DUrl(e.target.value)}
-                      className="flex-1 text-xs px-3 py-2 bg-white border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-slate-800 transition"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-indigo-650 hover:bg-indigo-600 text-white font-medium text-xs rounded-xl shadow transition"
-                    >
-                      Load
-                    </button>
-                  </div>
-                  {threeError && <p className="text-[10px] text-rose-400 mt-1">{threeError}</p>}
-                </form>
-              </div>
-            )}
+            <div className="grid grid-cols-3 gap-2">
+              {(['none', 'bear', 'cat', 'panda', 'dog', 'rabbit'] as AvatarType[]).map((type) => {
+                const active = avatarType === type;
+                return (
+                  <button
+                    key={type}
+                    onClick={() => {
+                      setAvatarType(type);
+                    }}
+                    className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-2 uppercase tracking-wide text-[10px] font-semibold transition ${
+                      active 
+                        ? 'border-indigo-500 bg-indigo-550 text-white shadow-md' 
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    {/* Stylized Emoji Previews */}
+                    <span className="text-2xl">
+                      {type === 'none' ? '👤' : type === 'bear' ? '🐻' : type === 'cat' ? '🐱' : type === 'panda' ? '🐼' : type === 'dog' ? '🐶' : '🐰'}
+                    </span>
+                    <span>{type === 'none' ? 'Raw Feed' : type}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Card: Input Devices Settings */}
