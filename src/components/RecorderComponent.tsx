@@ -11,15 +11,6 @@ import { ThreeAvatarRenderer } from '../utils/threeAvatarRenderer';
 
 type AspectRatio = '9:16' | '1:1' | '16:9' | '4:3';
 
-interface SavedClip {
-  id: string;
-  url: string;
-  name: string;
-  timestamp: string;
-  duration: string;
-  aspectRatio: AspectRatio;
-}
-
 const ASPECT_RATIOS: Record<AspectRatio, { width: number; height: number; label: string; ratio: number }> = {
   '9:16': { width: 720, height: 1280, label: '9:16 (Portrait)', ratio: 9/16 },
   '1:1': { width: 720, height: 720, label: '1:1 (Square)', ratio: 1 },
@@ -58,7 +49,7 @@ export default function RecorderComponent() {
   const [countdown, setCountdown] = useState<number>(3);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState<number>(0);
-  const [savedClips, setSavedClips] = useState<SavedClip[]>([]);
+
 
   // Keep a ref in sync so the animation loop can read it without triggering re-mounts
   const setRecordingStateSynced = (next: 'idle' | 'countdown' | 'recording' | 'paused' | 'review') => {
@@ -88,17 +79,7 @@ export default function RecorderComponent() {
   // 7. Initialize Face Landmarker Hook
   const { landmarkerRef, isLoading: isLandmarkerLoading, error: landmarkerError, ready: isLandmarkerReady } = useFaceLandmarker();
 
-  // Load saved clips from localStorage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('speakgarden_clips');
-    if (saved) {
-      try {
-        setSavedClips(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse saved clips', e);
-      }
-    }
-  }, []);
+
 
   // Enumerate Devices
   useEffect(() => {
@@ -517,14 +498,14 @@ export default function RecorderComponent() {
     }
   };
 
-  // Helper to check supported MimeTypes in browsers
+  // Helper to check supported MimeTypes in browsers (prioritize MP4)
   const getSupportedMimeType = () => {
     const types = [
+      'video/mp4;codecs=avc1,mp4a',
+      'video/mp4',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
       'video/webm',
-      'video/mp4;codecs=avc1,mp4a',
-      'video/mp4',
     ];
     for (const type of types) {
       if (MediaRecorder.isTypeSupported(type)) {
@@ -580,12 +561,12 @@ export default function RecorderComponent() {
     }, 100);
   };
 
-  // Download recorded video
+  // Download recorded video (force MP4 container output file)
   const handleDownload = () => {
     if (!recordedUrl) return;
 
     const timeString = new Date().toISOString().split('T')[0];
-    const fileName = `SpeakGarden_${aspectRatio.replace(':', 'x')}_${timeString}.webm`;
+    const fileName = `SpeakGarden_${aspectRatio.replace(':', 'x')}_${timeString}.mp4`;
     
     const a = document.createElement('a');
     a.href = recordedUrl;
@@ -593,29 +574,6 @@ export default function RecorderComponent() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-
-    // Save clip to history list
-    const newClip: SavedClip = {
-      id: Math.random().toString(36).substring(7),
-      url: recordedUrl,
-      name: fileName,
-      timestamp: new Date().toLocaleString(),
-      duration: formatTime(recordingTime),
-      aspectRatio: aspectRatio
-    };
-
-    const updatedClips = [newClip, ...savedClips];
-    setSavedClips(updatedClips);
-    localStorage.setItem('speakgarden_clips', JSON.stringify(updatedClips));
-  };
-
-  // Delete saved clip from history
-  const handleDeleteClip = (id: string, url: string) => {
-    // Revoke the object URL to release browser memory
-    URL.revokeObjectURL(url);
-    const updated = savedClips.filter(c => c.id !== id);
-    setSavedClips(updated);
-    localStorage.setItem('speakgarden_clips', JSON.stringify(updated));
   };
 
   // Helper formatting seconds to MM:SS
@@ -872,8 +830,8 @@ export default function RecorderComponent() {
           
           {/* Card: Dimensions Picker */}
           <div className="glass-panel p-5">
-            <h2 className="text-sm font-semibold mb-4 text-indigo-200 flex items-center gap-2">
-              <LayoutGrid className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-sm font-semibold mb-4 text-slate-800 flex items-center gap-2">
+              <LayoutGrid className="w-4 h-4 text-indigo-500" />
               1. Aspect Ratio Dimensions
             </h2>
             <div className="grid grid-cols-2 gap-3">
@@ -886,12 +844,12 @@ export default function RecorderComponent() {
                     disabled={recordingState !== 'idle'}
                     className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition ${
                       active 
-                        ? 'border-indigo-500 bg-indigo-500/10 text-white' 
-                        : 'border-white/5 bg-white/2 hover:bg-white/5 text-var(--color-text-secondary) disabled:opacity-50'
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold' 
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-50'
                     }`}
                   >
                     <span className="text-xs font-semibold">{key === '9:16' ? '9:16 (Portrait)' : key === '1:1' ? '1:1 (Square)' : key === '16:9' ? '16:9 (Landscape)' : '4:3 (Classic)'}</span>
-                    <span className="text-[10px] text-var(--color-text-muted)">
+                    <span className="text-[10px] text-slate-400">
                       {ASPECT_RATIOS[key].width} × {ASPECT_RATIOS[key].height}
                     </span>
                   </button>
@@ -903,23 +861,23 @@ export default function RecorderComponent() {
           {/* Card: Filter Engine (Avatars) */}
           <div className="glass-panel p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-indigo-200 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-400" />
+              <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-500" />
                 2. Cartoon Avatar Filters
               </h2>
               
               {/* 2D / 3D Mode Toggle */}
               {avatarType !== 'none' && (
-                <div className="flex rounded-lg bg-slate-900 p-0.5 border border-white/5 text-[10px] font-bold uppercase tracking-wider">
+                <div className="flex rounded-lg bg-slate-200 p-0.5 border border-slate-300 text-[10px] font-bold uppercase tracking-wider">
                   <button
                     onClick={() => setAvatarMode('2d')}
-                    className={`px-3 py-1 rounded-md transition ${avatarMode === '2d' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                    className={`px-3 py-1 rounded-md transition ${avatarMode === '2d' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
                   >
                     2D Animals
                   </button>
                   <button
                     onClick={() => setAvatarMode('3d')}
-                    className={`px-3 py-1 rounded-md transition ${avatarMode === '3d' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                    className={`px-3 py-1 rounded-md transition ${avatarMode === '3d' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
                   >
                     3D Human
                   </button>
@@ -941,8 +899,8 @@ export default function RecorderComponent() {
                       }}
                       className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-2 uppercase tracking-wide text-[10px] font-semibold transition ${
                         active 
-                          ? 'border-indigo-500 bg-indigo-500/10 text-white' 
-                          : 'border-white/5 bg-white/2 hover:bg-white/5 text-var(--color-text-secondary)'
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700' 
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                       }`}
                     >
                       {/* Stylized Emoji Previews */}
@@ -970,8 +928,8 @@ export default function RecorderComponent() {
                         }}
                         className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-1.5 transition ${
                           active 
-                            ? 'border-indigo-500 bg-indigo-500/10 text-white' 
-                            : 'border-white/5 bg-white/2 hover:bg-white/5 text-var(--color-text-secondary)'
+                            ? 'border-indigo-500 bg-indigo-550 text-white shadow-md' 
+                            : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                         }`}
                       >
                         <span className="text-2xl">🤖</span>
@@ -983,7 +941,7 @@ export default function RecorderComponent() {
                 
                 {/* Paste Ready Player Me .glb URL */}
                 <form onSubmit={handleLoadCustom3D} className="flex flex-col gap-2">
-                  <label className="text-[10px] text-var(--color-text-muted) uppercase font-semibold">
+                  <label className="text-[10px] text-slate-400 uppercase font-semibold">
                     Paste custom Ready Player Me GLB URL
                   </label>
                   <div className="flex gap-2">
@@ -992,7 +950,7 @@ export default function RecorderComponent() {
                       placeholder="https://models.readyplayer.me/avatar.glb"
                       value={custom3DUrl}
                       onChange={(e) => setCustom3DUrl(e.target.value)}
-                      className="flex-1 text-xs px-3 py-2 bg-slate-900 border border-white/10 rounded-xl focus:border-indigo-500 outline-none text-white transition"
+                      className="flex-1 text-xs px-3 py-2 bg-white border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-slate-800 transition"
                     />
                     <button
                       type="submit"
@@ -1010,8 +968,8 @@ export default function RecorderComponent() {
           {/* Card: Backgrounds (Only active when Avatar is selected) */}
           {avatarType !== 'none' && (
             <div className="glass-panel p-5">
-              <h2 className="text-sm font-semibold mb-4 text-indigo-200 flex items-center gap-2">
-                <Monitor className="w-4 h-4 text-indigo-400" />
+              <h2 className="text-sm font-semibold mb-4 text-slate-800 flex items-center gap-2">
+                <Monitor className="w-4 h-4 text-indigo-500" />
                 3. Background Scene
               </h2>
               <div className="grid grid-cols-3 gap-2">
@@ -1023,14 +981,14 @@ export default function RecorderComponent() {
                       onClick={() => setBackgroundType(bg)}
                       className={`aspect-square rounded-xl border flex flex-col items-center justify-center p-1 uppercase text-[8px] font-bold transition ${
                         active 
-                          ? 'border-indigo-500 bg-indigo-500/10 text-white shadow-lg shadow-indigo-500/5' 
-                          : 'border-white/5 bg-white/2 hover:bg-white/5 text-var(--color-text-secondary)'
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-lg shadow-indigo-500/5' 
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                       }`}
                       title={bg}
                     >
                       {/* Gradient preview circle */}
                       <span 
-                        className="w-5 h-5 rounded-full mb-1 border border-white/10"
+                        className="w-5 h-5 rounded-full mb-1 border border-slate-200"
                         style={{
                           background: bg === 'camera'
                             ? 'linear-gradient(to bottom, #475569, #1e293b)'
@@ -1055,13 +1013,13 @@ export default function RecorderComponent() {
 
           {/* Card: Input Devices Settings */}
           <div className="glass-panel p-5 flex flex-col gap-4">
-            <h2 className="text-sm font-semibold text-indigo-200 flex items-center gap-2">
-              <Settings className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+              <Settings className="w-4 h-4 text-indigo-500" />
               {avatarType !== 'none' ? '4. Input Devices' : '3. Input Devices'}
             </h2>
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] text-var(--color-text-muted) uppercase font-semibold flex items-center gap-1">
+                <label className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
                   <Camera className="w-3.5 h-3.5" />
                   Camera source
                 </label>
@@ -1069,7 +1027,7 @@ export default function RecorderComponent() {
                   value={selectedCamera}
                   onChange={(e) => setSelectedCamera(e.target.value)}
                   disabled={recordingState !== 'idle'}
-                  className="w-full text-xs px-3 py-2 bg-slate-900 border border-white/10 rounded-xl focus:border-indigo-500 outline-none text-white transition disabled:opacity-50"
+                  className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-slate-800 transition disabled:opacity-50"
                 >
                   {cameras.map(d => (
                     <option key={d.deviceId} value={d.deviceId}>
@@ -1081,7 +1039,7 @@ export default function RecorderComponent() {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] text-var(--color-text-muted) uppercase font-semibold flex items-center gap-1">
+                <label className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
                   <Mic className="w-3.5 h-3.5" />
                   Microphone source
                 </label>
@@ -1089,7 +1047,7 @@ export default function RecorderComponent() {
                   value={selectedMic}
                   onChange={(e) => setSelectedMic(e.target.value)}
                   disabled={recordingState !== 'idle'}
-                  className="w-full text-xs px-3 py-2 bg-slate-900 border border-white/10 rounded-xl focus:border-indigo-500 outline-none text-white transition disabled:opacity-50"
+                  className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-slate-800 transition disabled:opacity-50"
                 >
                   {microphones.map(d => (
                     <option key={d.deviceId} value={d.deviceId}>
@@ -1104,70 +1062,6 @@ export default function RecorderComponent() {
 
         </section>
       </main>
-
-      {/* Gallery Section: Saved Clips History */}
-      {savedClips.length > 0 && (
-        <section className="w-full max-w-6xl mt-4 border-t border-white/5 pt-8">
-          <h2 className="text-lg font-bold mb-6 bg-clip-text text-transparent bg-gradient-to-r from-indigo-200 to-purple-200 flex items-center gap-2">
-            <Video className="w-5 h-5 text-indigo-400" />
-            Your Recorded Clips ({savedClips.length})
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-            {savedClips.map((clip) => (
-              <div 
-                key={clip.id} 
-                className="glass-panel overflow-hidden border-white/5 flex flex-col gap-3 group relative hover:border-indigo-500/30 transition-all duration-300"
-              >
-                {/* Playback Container */}
-                <div 
-                  className="w-full overflow-hidden bg-slate-950 flex items-center justify-center border-b border-white/5 relative"
-                  style={{ aspectRatio: ASPECT_RATIOS[clip.aspectRatio].ratio, maxHeight: '280px' }}
-                >
-                  <video 
-                    src={clip.url} 
-                    controls 
-                    className="max-w-full max-h-full"
-                  />
-                </div>
-                
-                {/* Details Footer */}
-                <div className="px-4 pb-4 flex flex-col gap-2 relative">
-                  <div className="flex justify-between items-start">
-                    <div className="overflow-hidden">
-                      <p className="text-xs font-semibold text-white truncate max-w-[180px]">
-                        {clip.name}
-                      </p>
-                      <p className="text-[10px] text-slate-400">{clip.timestamp}</p>
-                    </div>
-                    <span className="text-[10px] font-mono bg-white/5 px-2 py-0.5 rounded font-bold">
-                      {clip.duration}
-                    </span>
-                  </div>
-
-                  {/* Actions Row */}
-                  <div className="flex gap-2 mt-2">
-                    <a 
-                      href={clip.url}
-                      download={clip.name}
-                      className="flex-1 py-2 rounded-lg bg-indigo-650 hover:bg-indigo-600 text-white font-semibold text-[10px] flex items-center justify-center gap-1.5 transition"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Save File
-                    </a>
-                    <button 
-                      onClick={() => handleDeleteClip(clip.id, clip.url)}
-                      className="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition"
-                      title="Delete Clip"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   );
 }
