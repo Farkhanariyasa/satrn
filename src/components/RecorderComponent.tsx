@@ -688,51 +688,23 @@ export default function RecorderComponent() {
 
             {/* Overlay: Active Review Overlay */}
             {recordingState === 'review' && recordedUrl && (
-              <div className="absolute inset-0 bg-black z-30 flex flex-col justify-between overflow-hidden">
-                {/* Top Badge */}
-                <div className="relative z-10 w-full flex justify-center pt-3 pointer-events-none">
-                  <span className="px-3 py-1 rounded-full bg-slate-900/80 border border-white/10 text-xs font-semibold text-indigo-300 backdrop-blur-md shadow-md">
-                    Preview Clip ({ASPECT_RATIOS[aspectRatio].label})
-                  </span>
-                </div>
-
-                {/* Video Player spanning full container matching exact aspect ratio */}
-                <div className="absolute inset-0 z-0 flex items-center justify-center bg-black">
-                  <video 
-                    key={recordedUrl}
-                    src={recordedUrl} 
-                    controls 
-                    className="w-full h-full object-contain"
-                    autoPlay
-                    muted
-                    loop
-                    playsInline
-                    onLoadedData={(e) => {
-                      const vid = e.currentTarget;
-                      vid.play().catch(() => {});
-                      // Unmute after a short delay so user hears audio on loop
-                      setTimeout(() => { vid.muted = false; }, 300);
-                    }}
-                  />
-                </div>
-
-                {/* Floating Action Buttons */}
-                <div className="relative z-10 flex gap-3 w-full justify-center mt-auto p-3 bg-gradient-to-t from-black/90 via-black/40 to-transparent">
-                  <button 
-                    onClick={handleRetake}
-                    className="flex-1 max-w-[140px] py-2.5 rounded-xl border border-white/20 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white font-medium text-xs flex items-center justify-center gap-2 transition shadow-lg"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Retake
-                  </button>
-                  <button 
-                    onClick={handleDownload}
-                    className="flex-1 max-w-[180px] py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-90 active:scale-98 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/30 transition"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Download Video
-                  </button>
-                </div>
+              <div className="absolute inset-0 bg-black z-30 flex items-center justify-center">
+                <video 
+                  key={recordedUrl}
+                  src={recordedUrl} 
+                  controls 
+                  className="w-full h-full object-contain"
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  onLoadedData={(e) => {
+                    const vid = e.currentTarget;
+                    vid.play().catch(() => {});
+                    // Unmute after a short delay so user hears audio on loop
+                    setTimeout(() => { vid.muted = false; }, 300);
+                  }}
+                />
               </div>
             )}
 
@@ -762,60 +734,77 @@ export default function RecorderComponent() {
             )}
           </div>
 
-          {/* Action Recorder Console buttons */}
-          {recordingState !== 'review' && (
-            <div className="flex items-center gap-4 justify-center py-2">
-              {recordingState === 'idle' && (
-                <button
-                  onClick={initiateRecording}
-                  disabled={isLandmarkerLoading || (avatarMode === '3d' && isThreeModelLoading)}
-                  className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 hover:scale-105 active:scale-95 disabled:bg-slate-700 disabled:text-slate-500 disabled:scale-100 flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all border-4 border-white/10"
-                  title="Start Recording"
+          {/* Action Recorder Console & Review buttons Card */}
+          <div className="glass-panel p-5 w-full flex items-center justify-center min-h-[96px]">
+            {recordingState === 'review' && (
+              <div className="flex gap-4 w-full justify-center max-w-sm">
+                <button 
+                  onClick={handleRetake}
+                  className="flex-1 py-3 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs flex items-center justify-center gap-2 shadow transition"
                 >
-                  <div className="w-6 h-6 rounded-full bg-white" />
+                  <RotateCcw className="w-4 h-4 text-slate-500" />
+                  Retake
                 </button>
-              )}
-
-              {recordingState === 'countdown' && (
-                <button
-                  className="w-16 h-16 rounded-full bg-slate-800 border-4 border-white/5 flex items-center justify-center text-slate-500 cursor-not-allowed"
-                  disabled
+                <button 
+                  onClick={handleDownload}
+                  className="flex-1 py-3 px-5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition"
                 >
-                  <span className="font-bold text-lg animate-pulse">Wait</span>
+                  <Download className="w-4 h-4" />
+                  Download MP4
                 </button>
-              )}
+              </div>
+            )}
 
-              {(recordingState === 'recording' || recordingState === 'paused') && (
-                <>
-                  {recordingState === 'recording' ? (
-                    <button
-                      onClick={pauseRecording}
-                      className="w-12 h-12 rounded-full bg-slate-800 hover:bg-slate-750 active:scale-95 text-amber-400 border border-white/10 flex items-center justify-center shadow-md transition"
-                      title="Pause Recording"
-                    >
-                      <Pause className="w-5 h-5 fill-current" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={resumeRecording}
-                      className="w-12 h-12 rounded-full bg-indigo-650 hover:bg-indigo-600 active:scale-95 text-emerald-400 border border-white/10 flex items-center justify-center shadow-md transition animate-pulse"
-                      title="Resume Recording"
-                    >
-                      <Play className="w-5 h-5 fill-current" />
-                    </button>
-                  )}
+            {recordingState === 'idle' && (
+              <button
+                onClick={initiateRecording}
+                disabled={isLandmarkerLoading || (avatarMode === '3d' && isThreeModelLoading)}
+                className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 hover:scale-105 active:scale-95 disabled:bg-slate-350 disabled:text-slate-500 disabled:scale-100 flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all border-4 border-white"
+                title="Start Recording"
+              >
+                <div className="w-6 h-6 rounded-full bg-white" />
+              </button>
+            )}
 
+            {recordingState === 'countdown' && (
+              <button
+                className="w-16 h-16 rounded-full bg-slate-200 border-4 border-white flex items-center justify-center text-slate-400 cursor-not-allowed"
+                disabled
+              >
+                <span className="font-bold text-sm animate-pulse">Wait</span>
+              </button>
+            )}
+
+            {(recordingState === 'recording' || recordingState === 'paused') && (
+              <div className="flex gap-4 items-center justify-center">
+                {recordingState === 'recording' ? (
                   <button
-                    onClick={stopRecording}
-                    className="w-16 h-16 rounded-full bg-rose-650 hover:bg-rose-700 hover:scale-105 active:scale-95 text-white border-4 border-white/10 flex items-center justify-center shadow-lg shadow-rose-650/30 transition-all"
-                    title="Stop Recording"
+                    onClick={pauseRecording}
+                    className="w-12 h-12 rounded-full bg-slate-200 hover:bg-slate-300 active:scale-95 text-amber-600 border border-slate-300 flex items-center justify-center shadow-md transition"
+                    title="Pause Recording"
                   >
-                    <Square className="w-6 h-6 fill-current" />
+                    <Pause className="w-5 h-5 fill-current" />
                   </button>
-                </>
-              )}
-            </div>
-          )}
+                ) : (
+                  <button
+                    onClick={resumeRecording}
+                    className="w-12 h-12 rounded-full bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 border border-indigo-200 flex items-center justify-center shadow-md transition animate-pulse"
+                    title="Resume Recording"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                  </button>
+                )}
+
+                <button
+                  onClick={stopRecording}
+                  className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-650 hover:scale-105 active:scale-95 text-white border-4 border-white flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all"
+                  title="Stop Recording"
+                >
+                  <Square className="w-6 h-6 fill-current" />
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Prompt status alert info */}
           {avatarType !== 'none' && !isLandmarkerReady && !isLandmarkerLoading && (
@@ -965,57 +954,11 @@ export default function RecorderComponent() {
             )}
           </div>
 
-          {/* Card: Backgrounds (Only active when Avatar is selected) */}
-          {avatarType !== 'none' && (
-            <div className="glass-panel p-5">
-              <h2 className="text-sm font-semibold mb-4 text-slate-800 flex items-center gap-2">
-                <Monitor className="w-4 h-4 text-indigo-500" />
-                3. Background Scene
-              </h2>
-              <div className="grid grid-cols-3 gap-2">
-                {(['camera', 'sunset', 'cosmic', 'mint', 'office', 'dark'] as BackgroundType[]).map((bg) => {
-                  const active = backgroundType === bg;
-                  return (
-                    <button
-                      key={bg}
-                      onClick={() => setBackgroundType(bg)}
-                      className={`aspect-square rounded-xl border flex flex-col items-center justify-center p-1 uppercase text-[8px] font-bold transition ${
-                        active 
-                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-lg shadow-indigo-500/5' 
-                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                      }`}
-                      title={bg}
-                    >
-                      {/* Gradient preview circle */}
-                      <span 
-                        className="w-5 h-5 rounded-full mb-1 border border-slate-200"
-                        style={{
-                          background: bg === 'camera'
-                            ? 'linear-gradient(to bottom, #475569, #1e293b)'
-                            : bg === 'sunset' 
-                            ? 'linear-gradient(to bottom, #ff7e5f, #feb47b)'
-                            : bg === 'cosmic'
-                            ? 'radial-gradient(circle, #312e81 0%, #020617 100%)'
-                            : bg === 'mint'
-                            ? 'linear-gradient(to bottom, #a7f3d0, #064e3b)'
-                            : bg === 'office'
-                            ? 'linear-gradient(to bottom, #fef3c7, #d97706)'
-                            : '#0f172a'
-                        }}
-                      />
-                      <span>{bg === 'camera' ? 'Camera (Raw)' : bg}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Card: Input Devices Settings */}
           <div className="glass-panel p-5 flex flex-col gap-4">
             <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
               <Settings className="w-4 h-4 text-indigo-500" />
-              {avatarType !== 'none' ? '4. Input Devices' : '3. Input Devices'}
+              3. Input Devices
             </h2>
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
