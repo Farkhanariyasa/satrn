@@ -936,7 +936,7 @@ export default function RecorderComponent() {
                     }}
                     className={`py-3.5 px-2.5 rounded-xl border text-center flex flex-col items-center gap-2 uppercase tracking-wide text-[10px] font-semibold transition ${
                       active 
-                        ? 'border-indigo-500 bg-indigo-550 text-white shadow-md' 
+                        ? 'border-indigo-500 bg-indigo-650 text-white shadow-md' 
                         : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
                     }`}
                   >
