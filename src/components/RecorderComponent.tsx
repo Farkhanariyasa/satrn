@@ -4,24 +4,25 @@ import React, { useEffect, useRef, useState } from 'react';
 import { 
   Camera, Mic, Settings, Download, RotateCcw, Play, Pause, Square, 
   Sparkles, Trash2, Video, Volume2, Monitor, RefreshCw, LayoutGrid,
-  User, Cat, Dog, Smile, Sun, Snowflake, Film, Zap, Palette, SunMoon
+  User, Cat, Dog, Smile, Sun, Moon, Thermometer, Film, Zap, Palette,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
 import { drawBackground, drawCartoonBody, draw2DAvatar, AvatarType, BackgroundType, FaceData } from '../utils/avatarRenderer';
 
 export type CameraFilter = 'none' | 'pop' | 'bw' | 'cool' | 'chrome' | 'film' | 'warm' | 'tv' | 'leak' | 'touchup';
 
-const CAMERA_FILTERS: { value: CameraFilter; label: string; emoji: string }[] = [
-  { value: 'none', label: 'Normal', emoji: '🎬' },
-  { value: 'pop', label: 'Pop', emoji: '✨' },
-  { value: 'bw', label: 'B&W', emoji: '⚫' },
-  { value: 'cool', label: 'Cool', emoji: '❄️' },
-  { value: 'chrome', label: 'Chrome', emoji: '🌈' },
-  { value: 'film', label: 'Film', emoji: '🎞️' },
-  { value: 'warm', label: 'Warm', emoji: '☀️' },
-  { value: 'leak', label: 'Light Leak', emoji: '🔮' },
-  { value: 'tv', label: 'Vintage TV', emoji: '📺' },
-  { value: 'touchup', label: 'Touch Up', emoji: '🌸' },
+const CAMERA_FILTERS: { value: CameraFilter; label: string; icon: React.ComponentType<any> }[] = [
+  { value: 'none', label: 'Normal', icon: Video },
+  { value: 'pop', label: 'Pop', icon: Sparkles },
+  { value: 'bw', label: 'B&W', icon: Moon },
+  { value: 'cool', label: 'Cool', icon: Thermometer },
+  { value: 'chrome', label: 'Chrome', icon: Palette },
+  { value: 'film', label: 'Film', icon: Film },
+  { value: 'warm', label: 'Warm', icon: Sun },
+  { value: 'leak', label: 'Light Leak', icon: Zap },
+  { value: 'tv', label: 'Vintage TV', icon: Monitor },
+  { value: 'touchup', label: 'Touch Up', icon: Smile },
 ];
 
 
@@ -65,6 +66,7 @@ export default function RecorderComponent() {
   
   // 5. Audio Visualizer State
   const [micVolume, setMicVolume] = useState<number>(0);
+  const [filterPage, setFilterPage] = useState<number>(0);
 
   // 6. Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -872,106 +874,195 @@ export default function RecorderComponent() {
           </div>
 
           {/* Action Recorder Console & Review buttons Card */}
-          <div className="glass-panel p-5 w-full flex items-center justify-center min-h-[96px] relative z-20">
-            {recordingState === 'review' && (
-              <div className="flex gap-4 w-full justify-center max-w-sm">
-                <button 
-                  onClick={handleRetake}
-                  className="flex-1 py-3 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs flex items-center justify-center gap-2 shadow transition"
-                >
-                  <RotateCcw className="w-4 h-4 text-slate-500" />
-                  Retake
-                </button>
-                <div className="relative flex-1 flex">
+          <div className="glass-panel p-5 w-full max-w-full overflow-hidden flex flex-col gap-4 items-center justify-center relative z-20">
+            {/* Control buttons row */}
+            <div className="flex items-center justify-center w-full min-h-[64px]">
+              {recordingState === 'review' && (
+                <div className="flex gap-4 w-full justify-center max-w-sm">
                   <button 
-                    onClick={() => handleDownload('hd')}
-                    className="flex-1 py-3 px-4 rounded-l-xl bg-gradient-to-r from-indigo-500 to-indigo-650 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/20 transition"
+                    onClick={handleRetake}
+                    className="flex-1 py-3 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs flex items-center justify-center gap-2 shadow transition"
                   >
-                    <Download className="w-4 h-4" />
-                    Download HD
+                    <RotateCcw className="w-4 h-4 text-slate-500" />
+                    Retake
                   </button>
-                  <button 
-                    onClick={() => setShowDownloadMenu(prev => !prev)}
-                    className="py-3 px-3 rounded-r-xl bg-indigo-700 hover:bg-indigo-800 text-white border-l border-indigo-600 shadow-lg transition flex items-center justify-center"
-                    title="Choose download quality"
-                  >
-                    <span className="text-[10px] font-bold">SD</span>
-                  </button>
-                  
-                  {showDownloadMenu && (
-                    <div 
-                      className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 flex flex-col"
-                      style={{ backgroundColor: '#ffffff' }}
+                  <div className="relative flex-1 flex">
+                    <button 
+                      onClick={() => handleDownload('hd')}
+                      className="flex-1 py-3 px-4 rounded-l-xl bg-gradient-to-r from-indigo-500 to-indigo-650 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/20 transition"
                     >
-                      <button
-                        onClick={() => handleDownload('hd')}
-                        className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                      <Download className="w-4 h-4" />
+                      Download HD
+                    </button>
+                    <button 
+                      onClick={() => setShowDownloadMenu(prev => !prev)}
+                      className="py-3 px-3 rounded-r-xl bg-indigo-700 hover:bg-indigo-800 text-white border-l border-indigo-600 shadow-lg transition flex items-center justify-center"
+                      title="Choose download quality"
+                    >
+                      <span className="text-[10px] font-bold">SD</span>
+                    </button>
+                    
+                    {showDownloadMenu && (
+                      <div 
+                        className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 flex flex-col"
+                        style={{ backgroundColor: '#ffffff' }}
                       >
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        HD Quality (8 Mbps)
+                        <button
+                          onClick={() => handleDownload('hd')}
+                          className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                        >
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          HD Quality (8 Mbps)
+                        </button>
+                        <button
+                          onClick={() => handleDownload('sd')}
+                          className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                        >
+                          <span className="w-2 h-2 rounded-full bg-amber-500" />
+                          SD Quality (2 Mbps)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {recordingState === 'idle' && (
+                <button
+                  onClick={initiateRecording}
+                  disabled={isLandmarkerLoading}
+                  className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 hover:scale-105 active:scale-95 disabled:bg-slate-350 disabled:text-slate-500 disabled:scale-100 flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all border-4 border-white"
+                  title="Start Recording"
+                >
+                  <div className="w-6 h-6 rounded-full bg-white" />
+                </button>
+              )}
+
+              {recordingState === 'countdown' && (
+                <button
+                  className="w-16 h-16 rounded-full bg-slate-200 border-4 border-white flex items-center justify-center text-slate-400 cursor-not-allowed"
+                  disabled
+                >
+                  <span className="font-bold text-sm animate-pulse">Wait</span>
+                </button>
+              )}
+
+              {(recordingState === 'recording' || recordingState === 'paused') && (
+                <div className="flex gap-4 items-center justify-center">
+                  {recordingState === 'recording' ? (
+                    <button
+                      onClick={pauseRecording}
+                      className="w-12 h-12 rounded-full bg-slate-200 hover:bg-slate-300 active:scale-95 text-amber-600 border border-slate-300 flex items-center justify-center shadow-md transition"
+                      title="Pause Recording"
+                    >
+                      <Pause className="w-5 h-5 fill-current" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={resumeRecording}
+                      className="w-12 h-12 rounded-full bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 border border-indigo-200 flex items-center justify-center shadow-md transition animate-pulse"
+                      title="Resume Recording"
+                    >
+                      <Play className="w-5 h-5 fill-current" />
+                    </button>
+                  )}
+
+                  <button
+                    onClick={stopRecording}
+                    className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-650 hover:scale-105 active:scale-95 text-white border-4 border-white flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all"
+                    title="Stop Recording"
+                  >
+                    <Square className="w-6 h-6 fill-current" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Camera Filters Carousel - page-based, no overflow scroll needed */}
+            {recordingState === 'idle' && (() => {
+              const ITEMS_PER_PAGE = 4;
+              const totalPages = Math.ceil(CAMERA_FILTERS.length / ITEMS_PER_PAGE);
+              const pageFilters = CAMERA_FILTERS.slice(filterPage * ITEMS_PER_PAGE, (filterPage + 1) * ITEMS_PER_PAGE);
+              return (
+                <div className="w-full border-t border-slate-100 pt-3 flex flex-col gap-2">
+                  {/* Header row */}
+                  <div className="flex items-center justify-between px-1">
+                    <p className="text-[10px] text-slate-400 font-extrabold tracking-widest uppercase select-none">
+                      Camera Filters & Effects
+                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        {filterPage + 1}/{totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setFilterPage(p => Math.max(0, p - 1))}
+                        disabled={filterPage === 0}
+                        className="w-7 h-7 rounded-full bg-indigo-50 hover:bg-indigo-100 active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed text-indigo-600 flex items-center justify-center transition border border-indigo-200 cursor-pointer"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => handleDownload('sd')}
-                        className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                        type="button"
+                        onClick={() => setFilterPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={filterPage >= totalPages - 1}
+                        className="w-7 h-7 rounded-full bg-indigo-50 hover:bg-indigo-100 active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed text-indigo-600 flex items-center justify-center transition border border-indigo-200 cursor-pointer"
                       >
-                        <span className="w-2 h-2 rounded-full bg-amber-500" />
-                        SD Quality (2 Mbps)
+                        <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
-                  )}
+                  </div>
+
+                  {/* Filter pills - 1 row, equal width flex */}
+                  <div className="flex flex-row gap-1.5 w-full">
+                    {pageFilters.map((f) => {
+                      const active = cameraFilter === f.value;
+                      const Icon = f.icon;
+                      return (
+                        <button
+                          key={f.value}
+                          type="button"
+                          onClick={() => setCameraFilter(f.value)}
+                          style={{ 
+                            flex: '1 1 0',
+                            background: active ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' : '#ffffff',
+                            borderColor: active ? 'transparent' : '#e2e8f0'
+                          }}
+                          className={`h-14 rounded-xl border text-[10px] font-bold flex flex-col items-center justify-center gap-1 transition-all duration-200 active:scale-95 ${
+                            active
+                              ? 'shadow-md shadow-indigo-400/30'
+                              : 'hover:bg-slate-50 hover:border-indigo-200'
+                          }`}
+                        >
+                          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-white' : 'text-slate-500'}`} />
+                          <span className={`leading-none text-center ${active ? 'text-white' : 'text-slate-650'}`}>{f.label}</span>
+                        </button>
+                      );
+                    })}
+                    {/* Pad remaining slots to keep layout stable */}
+                    {Array.from({ length: ITEMS_PER_PAGE - pageFilters.length }).map((_, i) => (
+                      <div key={`pad-${i}`} style={{ flex: '1 1 0' }} />
+                    ))}
+                  </div>
+
+                  {/* Dot indicators */}
+                  <div className="flex justify-center gap-1.5 pt-0.5">
+                    {Array.from({ length: totalPages }).map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setFilterPage(i)}
+                        className={`rounded-full transition-all duration-200 ${
+                          i === filterPage
+                            ? 'w-4 h-1.5 bg-indigo-500'
+                            : 'w-1.5 h-1.5 bg-slate-300 hover:bg-slate-400'
+                        }`}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {recordingState === 'idle' && (
-              <button
-                onClick={initiateRecording}
-                disabled={isLandmarkerLoading}
-                className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 hover:scale-105 active:scale-95 disabled:bg-slate-350 disabled:text-slate-500 disabled:scale-100 flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all border-4 border-white"
-                title="Start Recording"
-              >
-                <div className="w-6 h-6 rounded-full bg-white" />
-              </button>
-            )}
-
-            {recordingState === 'countdown' && (
-              <button
-                className="w-16 h-16 rounded-full bg-slate-200 border-4 border-white flex items-center justify-center text-slate-400 cursor-not-allowed"
-                disabled
-              >
-                <span className="font-bold text-sm animate-pulse">Wait</span>
-              </button>
-            )}
-
-            {(recordingState === 'recording' || recordingState === 'paused') && (
-              <div className="flex gap-4 items-center justify-center">
-                {recordingState === 'recording' ? (
-                  <button
-                    onClick={pauseRecording}
-                    className="w-12 h-12 rounded-full bg-slate-200 hover:bg-slate-300 active:scale-95 text-amber-600 border border-slate-300 flex items-center justify-center shadow-md transition"
-                    title="Pause Recording"
-                  >
-                    <Pause className="w-5 h-5 fill-current" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={resumeRecording}
-                    className="w-12 h-12 rounded-full bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 border border-indigo-200 flex items-center justify-center shadow-md transition animate-pulse"
-                    title="Resume Recording"
-                  >
-                    <Play className="w-5 h-5 fill-current" />
-                  </button>
-                )}
-
-                <button
-                  onClick={stopRecording}
-                  className="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-650 hover:scale-105 active:scale-95 text-white border-4 border-white flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all"
-                  title="Stop Recording"
-                >
-                  <Square className="w-6 h-6 fill-current" />
-                </button>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Prompt status alert info */}
@@ -1051,38 +1142,11 @@ export default function RecorderComponent() {
             </div>
           </div>
 
-          {/* Card: Camera Filters & Effects */}
-          <div className="glass-panel p-5 flex flex-col gap-4">
-            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-              <Video className="w-4 h-4 text-indigo-500" />
-              3. Camera Filters & Effects
-            </h2>
-            <div className="grid grid-cols-2 gap-2">
-              {CAMERA_FILTERS.map((f) => {
-                const active = cameraFilter === f.value;
-                return (
-                  <button
-                    key={f.value}
-                    onClick={() => setCameraFilter(f.value)}
-                    className={`py-2 px-2.5 rounded-xl border text-left flex items-center gap-2 transition ${
-                      active 
-                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold' 
-                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <span className="text-lg">{f.emoji}</span>
-                    <span className="text-[11px] uppercase tracking-wide">{f.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Card: Input Devices Settings */}
           <div className="glass-panel p-5 flex flex-col gap-4">
             <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
               <Settings className="w-4 h-4 text-indigo-500" />
-              4. Input Devices
+              3. Input Devices
             </h2>
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
