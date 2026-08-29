@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   Camera, Mic, Settings, Download, RotateCcw, Play, Pause, Square, 
   Sparkles, Trash2, Video, Volume2, Monitor, RefreshCw, LayoutGrid,
   User, Cat, Dog, Smile, Sun, Moon, Thermometer, Film, Zap, Palette,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, FileText, Subtitles, Eye, EyeOff, Loader2, Type
 } from 'lucide-react';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
 import { drawBackground, drawCartoonBody, draw2DAvatar, AvatarType, BackgroundType, FaceData } from '../utils/avatarRenderer';
+import type { AlignedWord } from '../utils/lyricsAligner';
 
 export type CameraFilter = 'none' | 'pop' | 'bw' | 'cool' | 'chrome' | 'film' | 'warm' | 'tv' | 'leak' | 'touchup';
 
@@ -53,10 +54,24 @@ export default function RecorderComponent() {
   const [countdown, setCountdown] = useState<number>(3);
   const [recordedUrlHD, setRecordedUrlHD] = useState<string | null>(null);
   const [recordedUrlSD, setRecordedUrlSD] = useState<string | null>(null);
+  const [recordedBlobHD, setRecordedBlobHD] = useState<Blob | null>(null);
+  const [recordedBlobSD, setRecordedBlobSD] = useState<Blob | null>(null);
   const [recordingTime, setRecordingTime] = useState<number>(0);
   const [showDownloadMenu, setShowDownloadMenu] = useState<boolean>(false);
   const [cameraFilter, setCameraFilter] = useState<CameraFilter>('none');
 
+  // 4. Lyrics Sync States
+  const [lyricsText, setLyricsText] = useState<string>('');
+  const [alignedWords, setAlignedWords] = useState<AlignedWord[]>([]);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<string>('');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [showSubtitles, setShowSubtitles] = useState<boolean>(true);
+  const [isHD, setIsHD] = useState<boolean>(true);
+  const [burnProgress, setBurnProgress] = useState<number | null>(null);
+  const [isTeleprompter, setIsTeleprompter] = useState<boolean>(false);
+  const reviewVideoRef = useRef<HTMLVideoElement>(null);
+  const [reviewCurrentTime, setReviewCurrentTime] = useState<number>(0);
 
   // Keep a ref in sync so the animation loop can read it without triggering re-mounts
   const setRecordingStateSynced = (next: 'idle' | 'countdown' | 'recording' | 'paused' | 'review') => {
@@ -602,14 +617,18 @@ export default function RecorderComponent() {
         const actualType = mediaRecorderHD.mimeType || mimeType || 'video/webm';
         const blob = new Blob(recordedChunksRefHD.current, { type: actualType });
         const url = URL.createObjectURL(blob);
+        setRecordedBlobHD(blob);
         setRecordedUrlHD(url);
         setRecordingStateSynced('review');
 
+        // Auto-trigger lyrics alignment if lyrics were entered
+        if (lyricsText.trim()) {
+          triggerLyricsAlignment(blob);
+        }
+
         // Stop canvas capture stream track to release memory
         if (videoTrack) {
-          try {
-            videoTrack.stop();
-          } catch (e) {}
+          try { videoTrack.stop(); } catch (e) {}
         }
       };
 
@@ -617,6 +636,7 @@ export default function RecorderComponent() {
         const actualType = mediaRecorderSD.mimeType || mimeType || 'video/webm';
         const blob = new Blob(recordedChunksRefSD.current, { type: actualType });
         const url = URL.createObjectURL(blob);
+        setRecordedBlobSD(blob);
         setRecordedUrlSD(url);
       };
 
@@ -706,34 +726,101 @@ export default function RecorderComponent() {
     setRecordingStateSynced('idle');
     setRecordingTime(0);
     setShowDownloadMenu(false);
+    setAlignedWords([]);
+    setIsSyncing(false);
+    setSyncStatus('');
+    setSyncError(null);
+    setBurnProgress(null);
     setTimeout(() => {
-      if (recordedUrlHD) {
-        URL.revokeObjectURL(recordedUrlHD);
-      }
-      if (recordedUrlSD) {
-        URL.revokeObjectURL(recordedUrlSD);
-      }
+      if (recordedUrlHD) URL.revokeObjectURL(recordedUrlHD);
+      if (recordedUrlSD) URL.revokeObjectURL(recordedUrlSD);
       setRecordedUrlHD(null);
       setRecordedUrlSD(null);
+      setRecordedBlobHD(null);
+      setRecordedBlobSD(null);
     }, 100);
   };
 
-  // Download recorded video (force MP4 container output file)
-  const handleDownload = (quality: 'hd' | 'sd') => {
-    const url = quality === 'hd' ? recordedUrlHD : recordedUrlSD;
-    if (!url) return;
+  // Download recorded video (force MP4 container output, burn subtitles if enabled and aligned)
+  const handleDownload = async (quality: 'hd' | 'sd') => {
+    const rawUrl = quality === 'hd' ? recordedUrlHD : recordedUrlSD;
+    const rawBlob = quality === 'hd' ? recordedBlobHD : recordedBlobSD;
+    if (!rawUrl || !rawBlob) return;
 
     const timeString = new Date().toISOString().split('T')[0];
     const qualityLabel = quality === 'hd' ? 'HD' : 'SD';
     const fileName = `SpeakGarden_${aspectRatio.replace(':', 'x')}_${qualityLabel}_${timeString}.mp4`;
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setShowDownloadMenu(false);
+
+    // If subtitles are turned on and aligned words are loaded, burn them in frame-by-frame
+    if (showSubtitles && alignedWords.length > 0) {
+      setBurnProgress(0);
+      try {
+        const { burnSubtitles } = await import('../utils/subtitleBurner');
+        const burnedBlob = await burnSubtitles({
+          videoBlob: rawBlob,
+          words: alignedWords,
+          onProgress: (pct) => setBurnProgress(pct),
+        });
+        const url = URL.createObjectURL(burnedBlob);
+        const isWebM = burnedBlob.type.includes('webm');
+        const ext = isWebM ? 'webm' : 'mp4';
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `SpeakGarden_Karaoke_${qualityLabel}_${timeString}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Subtitle burning failed, downloading raw video:', err);
+        // Fallback to raw download if burn fails
+        const a = document.createElement('a');
+        a.href = rawUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } finally {
+        setBurnProgress(null);
+      }
+    } else {
+      // Subtitles disabled/missing: download raw video instantly
+      const a = document.createElement('a');
+      a.href = rawUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  // Trigger lyrics alignment pipeline (lazy-loads model on first use)
+  const triggerLyricsAlignment = async (blob: Blob) => {
+    if (!lyricsText.trim()) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    setSyncStatus('Extracting audio…');
+    try {
+      const { extractAudio, computeVAD } = await import('../utils/audioProcessor');
+      const { alignLyrics, LyricsMismatchError } = await import('../utils/lyricsAligner');
+      const audio = await extractAudio(blob);
+      const vadFrames = computeVAD(audio);
+      const words = await alignLyrics(audio, lyricsText, vadFrames, (status) => {
+        setSyncStatus(status);
+      });
+      setAlignedWords(words);
+      setShowSubtitles(true);
+    } catch (err: any) {
+      if (err?.name === 'LyricsMismatchError') {
+        // Specific rejection: lyrics too different from audio
+        setSyncError(err.message);
+      } else {
+        console.error('Lyrics alignment failed:', err);
+        setSyncError('Sync gagal. Coba rekam ulang atau periksa koneksi internet.');
+      }
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Helper formatting seconds to MM:SS
@@ -825,10 +912,11 @@ export default function RecorderComponent() {
               </div>
             )}
 
-            {/* Overlay: Active Review Overlay */}
+            {/* Overlay: Active Review Overlay with Karaoke Subtitle */}
             {recordingState === 'review' && (recordedUrlHD || recordedUrlSD) && (
               <div className="absolute inset-0 bg-black z-30 flex items-center justify-center">
                 <video 
+                  ref={reviewVideoRef}
                   key={recordedUrlHD || recordedUrlSD || 'review'}
                   src={recordedUrlHD || recordedUrlSD || undefined} 
                   controls 
@@ -837,13 +925,72 @@ export default function RecorderComponent() {
                   muted
                   loop
                   playsInline
+                  onTimeUpdate={(e) => setReviewCurrentTime(e.currentTarget.currentTime)}
                   onLoadedData={(e) => {
                     const vid = e.currentTarget;
                     vid.play().catch(() => {});
-                    // Unmute after a short delay so user hears audio on loop
                     setTimeout(() => { vid.muted = false; }, 300);
                   }}
                 />
+                {/* Karaoke subtitle overlay — bottom center, no background */}
+                {showSubtitles && alignedWords.length > 0 && (() => {
+                  const t = reviewCurrentTime;
+                  const windowStart = Math.max(0, alignedWords.findIndex(w => w.end > t) - 1);
+                  const windowWords = alignedWords.slice(windowStart, windowStart + 6);
+                  
+                  // Group into rows of max 3 words
+                  const rows: typeof windowWords[] = [];
+                  for (let i = 0; i < windowWords.length; i += 3) {
+                    rows.push(windowWords.slice(i, i + 3));
+                  }
+
+                  return rows.length > 0 ? (
+                    <div
+                      className="absolute left-0 right-0 flex flex-col gap-0.5 justify-center items-center pointer-events-none z-40"
+                      style={{ bottom: '15%' }}
+                    >
+                      {rows.map((row, rIdx) => (
+                        <div key={rIdx} className="flex gap-2 justify-center">
+                          {row.map((w, i) => {
+                            const isActive = t >= w.start && t < w.end;
+                            return (
+                              <span
+                                key={`${w.word}-${i}`}
+                                style={{
+                                  textShadow: '0 1px 6px rgba(0,0,0,1), 0 0 20px rgba(0,0,0,0.9)',
+                                  transition: 'all 0.1s ease',
+                                  display: 'inline-block',
+                                  fontSize: isActive ? '1.125rem' : '1rem',
+                                  fontWeight: 700,
+                                  color: isActive ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                                  transform: isActive ? 'scale(1.1)' : 'scale(1)',
+                                }}
+                              >
+                                {w.word}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+                {/* Syncing spinner overlay */}
+                {isSyncing && (
+                  <div className="absolute inset-0 bg-black/70 z-50 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+                    <p className="text-white text-sm font-semibold">{syncStatus}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Teleprompter overlay while recording */}
+            {isTeleprompter && lyricsText.trim() && (recordingState === 'recording' || recordingState === 'paused') && (
+              <div className="absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black/80 to-transparent px-4 py-6 pointer-events-none">
+                <p className="text-white text-sm font-medium text-center leading-relaxed opacity-90 whitespace-pre-wrap">
+                  {lyricsText}
+                </p>
               </div>
             )}
 
@@ -877,55 +1024,91 @@ export default function RecorderComponent() {
           <div className="glass-panel p-5 w-full max-w-full overflow-hidden flex flex-col gap-4 items-center justify-center relative z-20">
             {/* Control buttons row */}
             <div className="flex items-center justify-center w-full min-h-[64px]">
-              {recordingState === 'review' && (
-                <div className="flex gap-4 w-full justify-center max-w-sm">
-                  <button 
-                    onClick={handleRetake}
-                    className="flex-1 py-3 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs flex items-center justify-center gap-2 shadow transition"
-                  >
-                    <RotateCcw className="w-4 h-4 text-slate-500" />
-                    Retake
-                  </button>
-                  <div className="relative flex-1 flex">
-                    <button 
-                      onClick={() => handleDownload('hd')}
-                      className="flex-1 py-3 px-4 rounded-l-xl bg-gradient-to-r from-indigo-500 to-indigo-650 hover:opacity-90 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/20 transition"
-                    >
-                      <Download className="w-4 h-4" />
-                      Download HD
-                    </button>
-                    <button 
-                      onClick={() => setShowDownloadMenu(prev => !prev)}
-                      className="py-3 px-3 rounded-r-xl bg-indigo-700 hover:bg-indigo-800 text-white border-l border-indigo-600 shadow-lg transition flex items-center justify-center"
-                      title="Choose download quality"
-                    >
-                      <span className="text-[10px] font-bold">SD</span>
-                    </button>
-                    
-                    {showDownloadMenu && (
-                      <div 
-                        className="absolute bottom-full right-0 mb-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 flex flex-col"
-                        style={{ backgroundColor: '#ffffff' }}
+              {recordingState === 'review' && (() => {
+                return (
+                  <div className="flex flex-col gap-2 w-full">
+                    {/* Main action row: Retake | Download | Subtitle icon */}
+                    <div className="flex items-center gap-2.5 w-full">
+                      {/* Retake */}
+                      <button
+                        onClick={handleRetake}
+                        className="flex-1 h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
                       >
+                        <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                        Retake
+                      </button>
+
+                      {/* Download split button: [Download MP4] [HD/SD pill] */}
+                      <div className="flex-1 h-12 flex rounded-xl overflow-hidden shadow-md">
                         <button
-                          onClick={() => handleDownload('hd')}
-                          className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                          onClick={() => handleDownload(isHD ? 'hd' : 'sd')}
+                          disabled={burnProgress !== null}
+                          style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
+                          className="flex-1 h-full hover:opacity-90 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-80"
                         >
-                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                          HD Quality (8 Mbps)
+                          {burnProgress !== null ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 text-white animate-spin" />
+                              Burning {burnProgress}%
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-3.5 h-3.5 text-white" />
+                              Download MP4
+                            </>
+                          )}
                         </button>
                         <button
-                          onClick={() => handleDownload('sd')}
-                          className="px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition flex items-center gap-2"
+                          onClick={() => setIsHD(v => !v)}
+                          disabled={burnProgress !== null}
+                          title={isHD ? 'Currently HD — click for SD' : 'Currently SD — click for HD'}
+                          style={{ backgroundColor: isHD ? '#4338ca' : '#475569' }}
+                          className="px-3 h-full text-[10px] font-black tracking-wide text-white transition flex items-center border-l border-white/10 disabled:opacity-80"
                         >
-                          <span className="w-2 h-2 rounded-full bg-amber-500" />
-                          SD Quality (2 Mbps)
+                          {isHD ? 'HD' : 'SD'}
                         </button>
+                      </div>
+
+                      {/* Subtitle toggle icon */}
+                      {lyricsText.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => setShowSubtitles(v => !v)}
+                          title={showSubtitles ? 'Hide subtitles' : 'Show subtitles'}
+                          className={`w-12 h-12 rounded-xl border flex items-center justify-center flex-shrink-0 transition ${
+                            showSubtitles
+                              ? 'border-indigo-200 bg-indigo-50 text-indigo-600'
+                              : 'border-slate-200 bg-white text-slate-400'
+                          }`}
+                        >
+                          {showSubtitles
+                            ? <Eye className="w-4.5 h-4.5" />
+                            : <EyeOff className="w-4.5 h-4.5" />
+                          }
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Syncing status */}
+                    {isSyncing && (
+                      <div className="flex items-center justify-center gap-2 py-0.5">
+                        <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+                        <span className="text-[11px] text-indigo-400 font-medium">{syncStatus}</span>
+                      </div>
+                    )}
+
+                    {/* Mismatch / sync error banner */}
+                    {syncError && !isSyncing && (
+                      <div className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2">
+                        <span className="text-rose-500 text-sm leading-none mt-0.5">⚠️</span>
+                        <p className="text-xs text-rose-700 font-semibold leading-snug flex-1">{syncError}</p>
+                        <button type="button" onClick={() => setSyncError(null)} className="text-rose-300 hover:text-rose-500 text-xs transition">✕</button>
                       </div>
                     )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
+
 
               {recordingState === 'idle' && (
                 <button
@@ -1075,7 +1258,49 @@ export default function RecorderComponent() {
 
         {/* Right Column: Control Settings Panel */}
         <section className="lg:col-span-5 flex flex-col gap-6">
-          
+
+          {/* Card: Lyrics / Teleprompter */}
+          <div className="glass-panel p-5 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                <Type className="w-4 h-4 text-indigo-500" />
+                Lyrics & Auto-Sync
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsTeleprompter(v => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition border ${
+                  isTeleprompter
+                    ? 'bg-indigo-500 text-white border-indigo-500'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300'
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                Teleprompter
+              </button>
+            </div>
+            <textarea
+              value={lyricsText}
+              onChange={(e) => setLyricsText(e.target.value)}
+              placeholder={`Paste your lyrics here…\n\nAfter recording, the AI will automatically sync each word with your audio.`}
+              rows={5}
+              className="w-full text-xs px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400 outline-none text-slate-800 leading-relaxed resize-none transition placeholder:text-slate-300"
+            />
+            {lyricsText.trim() && (
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                ✨ <strong>{lyricsText.trim().split(/\s+/).length} words</strong> detected. AI will auto-sync after recording stops.
+              </p>
+            )}
+            {alignedWords.length > 0 && !isSyncing && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="text-xs text-emerald-700 font-semibold">
+                  {alignedWords.length} words synced ✓
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* Card: Dimensions Picker */}
           <div className="glass-panel p-5">
             <h2 className="text-sm font-semibold mb-4 text-slate-800 flex items-center gap-2">
