@@ -72,6 +72,9 @@ export default function RecorderComponent() {
   const [isTeleprompter, setIsTeleprompter] = useState<boolean>(false);
   const [teleprompterSpeed, setTeleprompterSpeed] = useState<number>(25); // px/sec
   const [selectedWordIndex, setSelectedWordIndex] = useState<number | null>(null);
+  
+  // Page Visibility State
+  const [isPageVisible, setIsPageVisible] = useState<boolean>(true);
   const [dragState, setDragState] = useState<{
     wordIdx: number;
     type: 'move' | 'resize-start' | 'resize-end';
@@ -173,9 +176,38 @@ export default function RecorderComponent() {
       .catch(err => console.error('Media permission denied', err));
   }, []);
 
+  // Monitor page visibility and focus
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsPageVisible(!document.hidden);
+    };
+    
+    const handleBlur = () => setIsPageVisible(false);
+    const handleFocus = () => setIsPageVisible(true);
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
+  // Calculate if camera should be active
+  const shouldCameraBeActive = recordingState !== 'review' && (isPageVisible || recordingState === 'recording' || recordingState === 'paused' || recordingState === 'countdown');
+
   // Setup Streams
   useEffect(() => {
-    if (!selectedCamera) return;
+    if (!selectedCamera || !shouldCameraBeActive) {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        setStream(null);
+      }
+      return;
+    }
 
     let activeStream: MediaStream | null = null;
 
@@ -220,7 +252,7 @@ export default function RecorderComponent() {
         audioContextRef.current.close();
       }
     };
-  }, [selectedCamera, selectedMic]);
+  }, [selectedCamera, selectedMic, shouldCameraBeActive]);
 
   // Audio Analyser Setup
   const setupAudioAnalyser = (mediaStream: MediaStream) => {
