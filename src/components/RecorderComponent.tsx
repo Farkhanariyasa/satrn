@@ -248,16 +248,16 @@ export default function RecorderComponent() {
       if (activeStream) {
         activeStream.getTracks().forEach(t => t.stop());
       }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(e => console.warn('AudioContext close error:', e));
       }
     };
   }, [selectedCamera, selectedMic, shouldCameraBeActive]);
 
   // Audio Analyser Setup
   const setupAudioAnalyser = (mediaStream: MediaStream) => {
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(e => console.warn('AudioContext close error:', e));
     }
 
     const audioTracks = mediaStream.getAudioTracks();
@@ -1436,23 +1436,14 @@ export default function RecorderComponent() {
                 return (
                   <div className="flex flex-col gap-2 w-full">
                     {/* Main action row: Retake | Download | Subtitle icon */}
-                    <div className="flex items-center gap-2.5 w-full">
-                      {/* Retake */}
-                      <button
-                        onClick={handleRetake}
-                        className="flex-1 h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-                        Retake
-                      </button>
-
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full">
                       {/* Download split button: [Download MP4] [HD/SD pill] */}
-                      <div className="flex-1 h-12 flex rounded-xl overflow-hidden shadow-md">
+                      <div className="w-full sm:flex-1 h-12 flex rounded-xl overflow-hidden shadow-md">
                         <button
                           onClick={() => handleDownload(isHD ? 'hd' : 'sd')}
                           disabled={burnProgress !== null}
                           style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
-                          className="flex-1 h-full hover:opacity-90 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-80"
+                          className="flex-1 h-full hover:opacity-90 active:scale-[0.99] text-white font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-80"
                         >
                           {burnProgress !== null ? (
                             <>
@@ -1471,30 +1462,42 @@ export default function RecorderComponent() {
                           disabled={burnProgress !== null}
                           title={isHD ? 'Currently HD — click for SD' : 'Currently SD — click for HD'}
                           style={{ backgroundColor: isHD ? '#4338ca' : '#475569' }}
-                          className="px-3 h-full text-[10px] font-black tracking-wide text-white transition flex items-center border-l border-white/10 disabled:opacity-80"
+                          className="px-6 h-full text-[10px] font-black tracking-wide text-white transition flex items-center justify-center border-l border-white/10 disabled:opacity-80 active:opacity-90 cursor-pointer"
                         >
                           {isHD ? 'HD' : 'SD'}
                         </button>
                       </div>
 
-                      {/* Subtitle toggle icon */}
-                      {lyricsText.trim() && (
+                      {/* Retake & Subtitles container */}
+                      <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                        {/* Retake */}
                         <button
-                          type="button"
-                          onClick={() => setShowSubtitles(v => !v)}
-                          title={showSubtitles ? 'Hide subtitles' : 'Show subtitles'}
-                          className={`w-12 h-12 rounded-xl border flex items-center justify-center flex-shrink-0 transition ${
-                            showSubtitles
-                              ? 'border-indigo-200 bg-indigo-50 text-indigo-600'
-                              : 'border-slate-200 bg-white text-slate-400'
-                          }`}
+                          onClick={handleRetake}
+                          className="flex-1 sm:w-32 h-12 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition active:scale-[0.98]"
                         >
-                          {showSubtitles
-                            ? <Eye className="w-4.5 h-4.5" />
-                            : <EyeOff className="w-4.5 h-4.5" />
-                          }
+                          <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                          Retake
                         </button>
-                      )}
+
+                        {/* Subtitle toggle icon */}
+                        {lyricsText.trim() && (
+                          <button
+                            type="button"
+                            onClick={() => setShowSubtitles(v => !v)}
+                            title={showSubtitles ? 'Hide subtitles' : 'Show subtitles'}
+                            className={`w-12 h-12 rounded-xl border flex items-center justify-center flex-shrink-0 transition active:scale-95 ${
+                              showSubtitles
+                                ? 'border-indigo-200 bg-indigo-50 text-indigo-600'
+                                : 'border-slate-200 bg-white text-slate-400'
+                            }`}
+                          >
+                            {showSubtitles
+                              ? <Eye className="w-4.5 h-4.5" />
+                              : <EyeOff className="w-4.5 h-4.5" />
+                            }
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Syncing status */}
@@ -1677,11 +1680,12 @@ export default function RecorderComponent() {
               <button
                 type="button"
                 onClick={() => setIsTeleprompter(v => !v)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition border ${
-                  isTeleprompter
-                    ? 'bg-indigo-500 text-white border-indigo-500'
-                    : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300'
-                }`}
+                style={{
+                  backgroundColor: isTeleprompter ? '#6366f1' : '#ffffff',
+                  color: isTeleprompter ? '#ffffff' : '#64748b',
+                  borderColor: isTeleprompter ? '#6366f1' : '#e2e8f0',
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition border cursor-pointer"
               >
                 <Eye className="w-3 h-3" />
                 Teleprompter
