@@ -874,38 +874,38 @@ export default function RecorderComponent() {
       if (dragState.type === 'resize-start') {
         const candidate = parseFloat((dragState.startValStart + deltaTime).toFixed(2));
         target.start = Math.max(0, Math.min(candidate, target.end - 0.05));
-        
-        // Adjust previous if overlapping
-        if (dragState.wordIdx > 0 && target.start < next[dragState.wordIdx - 1].end) {
-          next[dragState.wordIdx - 1].end = target.start;
-        }
       } else if (dragState.type === 'resize-end') {
         const candidate = parseFloat((dragState.startValEnd + deltaTime).toFixed(2));
         target.end = Math.max(target.start + 0.05, Math.min(candidate, duration));
-        
-        // Adjust next if overlapping
-        if (dragState.wordIdx < next.length - 1 && target.end > next[dragState.wordIdx + 1].start) {
-          next[dragState.wordIdx + 1].start = target.end;
-        }
       } else if (dragState.type === 'move') {
         const diff = target.end - target.start;
         const candidateStart = parseFloat((dragState.startValStart + deltaTime).toFixed(2));
         let newStart = Math.max(0, Math.min(candidateStart, duration - diff));
-        let newEnd = newStart + diff;
         
         target.start = newStart;
-        target.end = newEnd;
+        target.end = newStart + diff;
       }
 
-      // Re-enforce strictly monotonic timing across the rest of the array
-      for (let i = 1; i < next.length; i++) {
+      // 1. Resolve collisions forward (if dragged item pushed items to the right)
+      for (let i = dragState.wordIdx + 1; i < next.length; i++) {
         if (next[i].start < next[i - 1].end) {
           next[i].start = next[i - 1].end;
         }
         if (next[i].end <= next[i].start) {
-          next[i].end = next[i].start + 0.05;
+          next[i].end = Math.min(duration, next[i].start + 0.05);
         }
       }
+
+      // 2. Resolve collisions backward (if dragged item pushed items to the left)
+      for (let i = dragState.wordIdx - 1; i >= 0; i--) {
+        if (next[i].end > next[i + 1].start) {
+          next[i].end = next[i + 1].start;
+        }
+        if (next[i].start >= next[i].end) {
+          next[i].start = Math.max(0, next[i].end - 0.05);
+        }
+      }
+
       return next;
     });
   };
