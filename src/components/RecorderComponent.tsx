@@ -30,10 +30,10 @@ const CAMERA_FILTERS: { value: CameraFilter; label: string; icon: React.Componen
 type AspectRatio = '9:16' | '1:1' | '16:9' | '4:3';
 
 const ASPECT_RATIOS: Record<AspectRatio, { width: number; height: number; label: string; ratio: number }> = {
-  '9:16': { width: 720, height: 1280, label: '9:16 (Portrait)', ratio: 9/16 },
-  '1:1': { width: 720, height: 720, label: '1:1 (Square)', ratio: 1 },
-  '16:9': { width: 1280, height: 720, label: '16:9 (Landscape)', ratio: 16/9 },
-  '4:3': { width: 960, height: 720, label: '4:3 (Classic)', ratio: 4/3 },
+  '9:16': { width: 1080, height: 1920, label: '9:16 (Portrait)', ratio: 9/16 },
+  '1:1': { width: 1080, height: 1080, label: '1:1 (Square)', ratio: 1 },
+  '16:9': { width: 1920, height: 1080, label: '16:9 (Landscape)', ratio: 16/9 },
+  '4:3': { width: 1440, height: 1080, label: '4:3 (Classic)', ratio: 4/3 },
 };
 
 export default function RecorderComponent() {
@@ -220,9 +220,9 @@ export default function RecorderComponent() {
         const constraints: MediaStreamConstraints = {
           video: {
             deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60 } // Try to request 60 FPS for buttery smooth recording
           },
           audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
         };
@@ -317,6 +317,10 @@ export default function RecorderComponent() {
       if (canvas2D) {
         const ctx2D = canvas2D.getContext('2d');
         if (ctx2D) {
+          // Enable maximum drawing quality and anti-aliasing smoothing
+          ctx2D.imageSmoothingEnabled = true;
+          ctx2D.imageSmoothingQuality = 'high';
+
           // Adjust canvas size internally
           if (canvas2D.width !== targetSize.width || canvas2D.height !== targetSize.height) {
             canvas2D.width = targetSize.width;
@@ -604,8 +608,8 @@ export default function RecorderComponent() {
     }
 
     try {
-      // 1. Capture 30 FPS video track from Canvas
-      const canvasStream = recordCanvas.captureStream(30);
+      // 1. Capture 60 FPS video track from Canvas for ultra-smooth movement
+      const canvasStream = recordCanvas.captureStream(60);
       const videoTrack = canvasStream.getVideoTracks()[0];
 
       // 2. Fetch mic audio track
@@ -625,7 +629,8 @@ export default function RecorderComponent() {
       
       const optionsHD = {
         mimeType: mimeType || undefined,
-        videoBitsPerSecond: 8000000 // 8 Mbps for High Definition
+        videoBitsPerSecond: 28000000, // 28 Mbps for Ultra-High Quality 1080p
+        audioBitsPerSecond: 320000    // 320 kbps CD-Quality Audio
       };
 
       const optionsSD = {
