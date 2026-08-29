@@ -59,23 +59,8 @@ async function getASRPipeline(onProgress?: ProgressCallback): Promise<AutomaticS
   }
 }
 
-/**
- * Custom error thrown when lyrics are too different from the recorded audio.
- */
-export class LyricsMismatchError extends Error {
-  public confidence: number;
-  constructor(confidence: number) {
-    super(
-      `Lyrics mismatch: similarity too low (${Math.round(confidence * 100)}%). ` +
-      'Pastikan lirik yang dimasukkan sesuai dengan yang dinyanyikan.'
-    );
-    this.name = 'LyricsMismatchError';
-    this.confidence = confidence;
-  }
-}
+// LyricsMismatchError removed to allow always fallback to manual adjustment.
 
-/** Minimum average word-similarity required to accept alignment (0–1 scale). */
-const CONFIDENCE_THRESHOLD = 0.4;
 
 /**
  * Levenshtein-based sequence alignment.
@@ -205,6 +190,49 @@ function expandVowels(
  *  - manualLyrics: string (space-separated or newline-separated words from user)
  *  - vadFrames: energy profile from computeVAD()
  * 
+/**
+ * Detect language of manual lyrics text using common stopwords.
+ * Helps Whisper transcribe in the correct language mode.
+ */
+function detectLanguageFromLyrics(text: string): string | undefined {
+  const cleanText = text.toLowerCase();
+  
+  // Common Indonesian stopwords
+  const indonesianWords = [
+    'yang', 'dan', 'di', 'ke', 'dari', 'aku', 'kau', 'kamu', 'bisa', 'tidak', 
+    'ada', 'ini', 'itu', 'dengan', 'saya', 'untuk', 'mereka', 'kita', 'kami',
+    'satu', 'dua', 'tiga', 'empat', 'lima'
+  ];
+  // Common Javanese words
+  const javaneseWords = [
+    'sing', 'lan', 'ning', 'soko', 'kowe', 'ora', 'ono', 'iki', 'iku', 'karo', 
+    'kulo', 'dewe', 'sampeyan', 'mase', 'mbake'
+  ];
+
+  const words = cleanText.split(/\s+/);
+  let idCount = 0;
+  let jwCount = 0;
+
+  for (const w of words) {
+    const cleanW = w.replace(/[^a-z]/g, '');
+    if (indonesianWords.includes(cleanW)) idCount++;
+    if (javaneseWords.includes(cleanW)) jwCount++;
+  }
+
+  if (jwCount > idCount && jwCount > 0) return 'javanese';
+  if (idCount > 0) return 'indonesian';
+  
+  return undefined;
+}
+
+/**
+ * Main entry point.
+ * 
+ * Given:
+ *  - audio: 16kHz mono Float32Array
+ *  - manualLyrics: string (space-separated or newline-separated words from user)
+ *  - vadFrames: energy profile from computeVAD()
+ * 
  * Returns: AlignedWord[] with forced-aligned, post-processed word timestamps.
  */
 export async function alignLyrics(
@@ -212,24 +240,21 @@ export async function alignLyrics(
   manualLyrics: string,
   vadFrames: ReturnType<typeof computeVAD>,
   onProgress?: ProgressCallback
-): Promise<AlignedWord[]> {
+): Promise<{ words: AlignedWord[]; confidence: number }> {
   onProgress?.('Loading AI transcription model…');
   const asr = await getASRPipeline(onProgress);
 
   onProgress?.('Transcribing audio…');
-  // Use chunk-level timestamps (return_timestamps: true) — no cross-attentions required.
-  // We then expand each chunk proportionally into per-word timestamps ourselves.
+  const detectedLang = detectLanguageFromLyrics(manualLyrics);
+  
   const result = await (asr as any)(audio, {
-    return_timestamps: true,  // chunk-level, supported by all Whisper ONNX exports
+    return_timestamps: true,
     task: 'transcribe',
     chunk_length_s: 30,
     sampling_rate: 16000,
+    ...(detectedLang ? { language: detectedLang } : {}),
   }) as { chunks?: Array<{ text: string; timestamp: [number, number] }> };
 
-  /**
-   * Expand chunk timestamps into per-word timestamps.
-   * Words within a chunk are assigned time proportional to their character length.
-   */
   const whisperWords: AlignedWord[] = [];
   for (const chunk of result.chunks ?? []) {
     const chunkStart = chunk.timestamp[0] ?? 0;
@@ -249,31 +274,26 @@ export async function alignLyrics(
 
   onProgress?.('Aligning manual lyrics…');
 
-  // Tokenize the manual lyrics
   const refWords = manualLyrics
     .split(/\s+/)
     .map(w => w.trim())
     .filter(Boolean);
 
-  // If Whisper produced nothing, fall back to uniform distribution
+  // If Whisper produced nothing, fall back to uniform distribution with 0 confidence
   if (whisperWords.length === 0) {
     const duration = audio.length / 16000;
     const timePerWord = duration / refWords.length;
-    return refWords.map((word, i) => ({
+    const words = refWords.map((word, i) => ({
       word,
       start: i * timePerWord,
       end: (i + 1) * timePerWord,
     }));
+    return { words, confidence: 0 };
   }
 
   // Align reference lyrics with Whisper hypothesis + compute confidence
   const hypWords = whisperWords.map(w => w.word);
   const { mapping, confidence } = alignSequences(refWords, hypWords);
-
-  // Reject if similarity is too low
-  if (confidence < CONFIDENCE_THRESHOLD) {
-    throw new LyricsMismatchError(confidence);
-  }
 
   let aligned: AlignedWord[] = refWords.map((word, i) => {
     const hypIdx = Math.min(mapping[i], whisperWords.length - 1);
@@ -299,5 +319,5 @@ export async function alignLyrics(
   aligned = expandVowels(aligned, vadFrames, 0.01, 400);
 
   onProgress?.(`Done — sync confidence ${Math.round(confidence * 100)}%`);
-  return aligned;
+  return { words: aligned, confidence };
 }

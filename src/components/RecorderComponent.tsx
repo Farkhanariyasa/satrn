@@ -70,7 +70,20 @@ export default function RecorderComponent() {
   const [isHD, setIsHD] = useState<boolean>(true);
   const [burnProgress, setBurnProgress] = useState<number | null>(null);
   const [isTeleprompter, setIsTeleprompter] = useState<boolean>(false);
+  const [teleprompterSpeed, setTeleprompterSpeed] = useState<number>(25); // px/sec
+  const [selectedWordIndex, setSelectedWordIndex] = useState<number | null>(null);
+  const [dragState, setDragState] = useState<{
+    wordIdx: number;
+    type: 'move' | 'resize-start' | 'resize-end';
+    startX: number;
+    startValStart: number;
+    startValEnd: number;
+  } | null>(null);
   const reviewVideoRef = useRef<HTMLVideoElement>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const isScrubbingRef = useRef<boolean>(false);
+  const scrubStartXRef = useRef<number>(0);
+  const scrubStartTimeRef = useRef<number>(0);
   const [reviewCurrentTime, setReviewCurrentTime] = useState<number>(0);
 
   // Keep a ref in sync so the animation loop can read it without triggering re-mounts
@@ -731,6 +744,7 @@ export default function RecorderComponent() {
     setSyncStatus('');
     setSyncError(null);
     setBurnProgress(null);
+    setSelectedWordIndex(null);
     setTimeout(() => {
       if (recordedUrlHD) URL.revokeObjectURL(recordedUrlHD);
       if (recordedUrlSD) URL.revokeObjectURL(recordedUrlSD);
@@ -739,6 +753,156 @@ export default function RecorderComponent() {
       setRecordedBlobHD(null);
       setRecordedBlobSD(null);
     }, 100);
+  };
+
+  // Adjust timing of a specific word manually with constraints
+  const adjustWordTime = (index: number, field: 'start' | 'end', delta: number) => {
+    setAlignedWords(prev => {
+      const next = prev.map(item => ({ ...item }));
+      const word = next[index];
+      
+      if (field === 'start') {
+        word.start = Math.max(0, parseFloat((word.start + delta).toFixed(2)));
+        if (word.start + 0.05 > word.end) {
+          word.start = parseFloat((word.end - 0.05).toFixed(2));
+        }
+        if (index > 0 && word.start < next[index - 1].start) {
+          word.start = next[index - 1].start;
+        }
+      } else {
+        word.end = parseFloat((word.end + delta).toFixed(2));
+        if (word.end < word.start + 0.05) {
+          word.end = parseFloat((word.start + 0.05).toFixed(2));
+        }
+        if (index < next.length - 1 && word.end > next[index + 1].end) {
+          word.end = next[index + 1].end;
+        }
+      }
+
+      // Re-enforce strictly monotonic timing across the rest of the array
+      for (let i = 1; i < next.length; i++) {
+        if (next[i].start < next[i - 1].end) {
+          next[i].start = next[i - 1].end;
+        }
+        if (next[i].end <= next[i].start) {
+          next[i].end = next[i].start + 0.05;
+        }
+      }
+
+      return next;
+    });
+  };
+
+  // Seek preview video to word start time
+  const handleWordClick = (index: number) => {
+    setSelectedWordIndex(index);
+    if (reviewVideoRef.current) {
+      reviewVideoRef.current.currentTime = alignedWords[index].start;
+    }
+  };
+
+  // Pointer Down for Timeline word drag/resize
+  const handleTimelinePointerDown = (
+    e: React.PointerEvent,
+    wordIdx: number,
+    type: 'move' | 'resize-start' | 'resize-end'
+  ) => {
+    e.stopPropagation();
+    const w = alignedWords[wordIdx];
+    if (!w) return;
+    
+    setDragState({
+      wordIdx,
+      type,
+      startX: e.clientX,
+      startValStart: w.start,
+      startValEnd: w.end,
+    });
+    
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch (err) {}
+  };
+
+  // Pointer Move (calculate delta and update Word start/end with constraints)
+  const handleTimelinePointerMove = (e: React.PointerEvent) => {
+    if (!dragState) return;
+    const w = alignedWords[dragState.wordIdx];
+    if (!w) return;
+    
+    const deltaX = e.clientX - dragState.startX;
+    const pxPerSec = 90; // match timeline zoom
+    const deltaTime = deltaX / pxPerSec;
+    const duration = reviewVideoRef.current?.duration || recordingTime || 10;
+
+    setAlignedWords(prev => {
+      const next = prev.map(item => ({ ...item }));
+      const target = next[dragState.wordIdx];
+      
+      if (dragState.type === 'resize-start') {
+        const candidate = parseFloat((dragState.startValStart + deltaTime).toFixed(2));
+        target.start = Math.max(0, Math.min(candidate, target.end - 0.05));
+        
+        // Adjust previous if overlapping
+        if (dragState.wordIdx > 0 && target.start < next[dragState.wordIdx - 1].end) {
+          next[dragState.wordIdx - 1].end = target.start;
+        }
+      } else if (dragState.type === 'resize-end') {
+        const candidate = parseFloat((dragState.startValEnd + deltaTime).toFixed(2));
+        target.end = Math.max(target.start + 0.05, Math.min(candidate, duration));
+        
+        // Adjust next if overlapping
+        if (dragState.wordIdx < next.length - 1 && target.end > next[dragState.wordIdx + 1].start) {
+          next[dragState.wordIdx + 1].start = target.end;
+        }
+      } else if (dragState.type === 'move') {
+        const diff = target.end - target.start;
+        const candidateStart = parseFloat((dragState.startValStart + deltaTime).toFixed(2));
+        let newStart = Math.max(0, Math.min(candidateStart, duration - diff));
+        let newEnd = newStart + diff;
+        
+        target.start = newStart;
+        target.end = newEnd;
+      }
+
+      // Re-enforce strictly monotonic timing across the rest of the array
+      for (let i = 1; i < next.length; i++) {
+        if (next[i].start < next[i - 1].end) {
+          next[i].start = next[i - 1].end;
+        }
+        if (next[i].end <= next[i].start) {
+          next[i].end = next[i].start + 0.05;
+        }
+      }
+      return next;
+    });
+  };
+
+  // Pointer Up
+  const handleTimelinePointerUp = (e: React.PointerEvent) => {
+    if (dragState) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch (err) {}
+      setDragState(null);
+    }
+  };
+
+  // Scroll event for manual timeline scrubbing/dragging
+  const handleTimelineScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!isScrubbingRef.current) return;
+    const container = e.currentTarget;
+    const pxPerSec = 90;
+    const duration = reviewVideoRef.current?.duration || recordingTime || 10;
+    
+    // With 50% left padding, scrollLeft=0 maps exactly to time 0s.
+    const targetTime = container.scrollLeft / pxPerSec;
+    const boundedTime = Math.max(0, Math.min(targetTime, duration));
+    
+    if (reviewVideoRef.current) {
+      reviewVideoRef.current.currentTime = boundedTime;
+    }
+    setReviewCurrentTime(boundedTime);
   };
 
   // Download recorded video (force MP4 container output, burn subtitles if enabled and aligned)
@@ -802,22 +966,26 @@ export default function RecorderComponent() {
     setSyncStatus('Extracting audio…');
     try {
       const { extractAudio, computeVAD } = await import('../utils/audioProcessor');
-      const { alignLyrics, LyricsMismatchError } = await import('../utils/lyricsAligner');
+      const { alignLyrics } = await import('../utils/lyricsAligner');
       const audio = await extractAudio(blob);
       const vadFrames = computeVAD(audio);
-      const words = await alignLyrics(audio, lyricsText, vadFrames, (status) => {
+      const { words, confidence } = await alignLyrics(audio, lyricsText, vadFrames, (status) => {
         setSyncStatus(status);
       });
       setAlignedWords(words);
       setShowSubtitles(true);
-    } catch (err: any) {
-      if (err?.name === 'LyricsMismatchError') {
-        // Specific rejection: lyrics too different from audio
-        setSyncError(err.message);
-      } else {
-        console.error('Lyrics alignment failed:', err);
-        setSyncError('Sync gagal. Coba rekam ulang atau periksa koneksi internet.');
+
+      // Low confidence alert (soft warning instead of hard blocking error)
+      const dynamicThreshold = lyricsText.trim().split(/\s+/).length > 25 ? 0.18 : 0.35;
+      if (confidence < dynamicThreshold) {
+        setSyncError(
+          `AI Sync confidence agak rendah (${Math.round(confidence * 100)}%). ` +
+          'Beberapa kata mungkin perlu digeser/disesuaikan secara manual.'
+        );
       }
+    } catch (err: any) {
+      console.error('Lyrics alignment failed:', err);
+      setSyncError('Sync gagal. Periksa koneksi internet atau coba manual adjust.');
     } finally {
       setIsSyncing(false);
     }
@@ -925,7 +1093,16 @@ export default function RecorderComponent() {
                   muted
                   loop
                   playsInline
-                  onTimeUpdate={(e) => setReviewCurrentTime(e.currentTarget.currentTime)}
+                  onTimeUpdate={(e) => {
+                    const t = e.currentTarget.currentTime;
+                    setReviewCurrentTime(t);
+                    if (timelineScrollRef.current && !isScrubbingRef.current) {
+                      const container = timelineScrollRef.current;
+                      const pxPerSec = 90;
+                      const center = container.clientWidth / 2;
+                      container.scrollLeft = (t * pxPerSec) - center;
+                    }
+                  }}
                   onLoadedData={(e) => {
                     const vid = e.currentTarget;
                     vid.play().catch(() => {});
@@ -987,10 +1164,33 @@ export default function RecorderComponent() {
 
             {/* Teleprompter overlay while recording */}
             {isTeleprompter && lyricsText.trim() && (recordingState === 'recording' || recordingState === 'paused') && (
-              <div className="absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black/80 to-transparent px-4 py-6 pointer-events-none">
-                <p className="text-white text-sm font-medium text-center leading-relaxed opacity-90 whitespace-pre-wrap">
-                  {lyricsText}
-                </p>
+              <div 
+                className="absolute left-4 right-4 top-[15%] h-[150px] z-30 bg-black/75 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden pointer-events-none flex flex-col justify-start"
+                style={{
+                  WebkitMaskImage: 'linear-gradient(to bottom, transparent, white 25%, white 75%, transparent)',
+                  maskImage: 'linear-gradient(to bottom, transparent, white 25%, white 75%, transparent)',
+                }}
+              >
+                {/* Scrolling container */}
+                <div
+                  className="w-full text-center px-4"
+                  style={{
+                    transform: `translateY(${75 - (recordingTime * teleprompterSpeed)}px)`,
+                    transition: recordingState === 'recording' ? 'transform 1s linear' : 'none',
+                  }}
+                >
+                  {lyricsText.split('\n').map((line, i) => (
+                    <div 
+                      key={i} 
+                      className="text-white text-base font-semibold leading-loose tracking-wide opacity-90 py-0.5"
+                    >
+                      {line.trim() || '\u00A0'}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Horizontal focal center guide line */}
+                <div className="absolute top-[75px] left-4 right-4 h-[1px] bg-indigo-500/20 border-t border-dashed border-indigo-400/40 pointer-events-none" />
               </div>
             )}
 
@@ -1019,6 +1219,182 @@ export default function RecorderComponent() {
               </div>
             )}
           </div>
+
+          {/* Visual Subtitle Timeline Editor (CapCut Style) */}
+          {recordingState === 'review' && alignedWords.length > 0 && (() => {
+            const duration = reviewVideoRef.current?.duration || recordingTime || 10;
+            const pxPerSec = 90; // zoom scale
+            const timelineWidth = duration * pxPerSec;
+
+            // Generate ticks
+            const ticks: number[] = [];
+            for (let sec = 0; sec <= Math.ceil(duration); sec++) ticks.push(sec);
+
+            return (
+              <div className="w-full glass-panel overflow-hidden z-20 relative select-none">
+                {/* Header bar */}
+                <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 bg-slate-50/50">
+                  <span className="text-[10px] text-slate-500 font-bold tracking-widest uppercase flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                    Subtitle Timeline
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-600 font-bold">
+                    {String(Math.floor(reviewCurrentTime / 60)).padStart(2,'0')}:{(reviewCurrentTime % 60).toFixed(2).padStart(5,'0')}
+                    <span className="text-slate-300 mx-1">/</span>
+                    {String(Math.floor(duration / 60)).padStart(2,'0')}:{(duration % 60).toFixed(2).padStart(5,'0')}
+                  </span>
+                </div>
+
+                {/* Timeline viewport — overflow hidden, scrubbing via wheel or drag on background */}
+                <div
+                  className="relative overflow-hidden bg-[#111827] cursor-ew-resize"
+                  style={{ height: '96px' }}
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    const duration = reviewVideoRef.current?.duration || recordingTime || 10;
+                    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+                    const newTime = Math.max(0, Math.min(
+                      (reviewVideoRef.current?.currentTime ?? reviewCurrentTime) + delta / 90,
+                      duration
+                    ));
+                    if (reviewVideoRef.current) reviewVideoRef.current.currentTime = newTime;
+                    setReviewCurrentTime(newTime);
+                  }}
+                  onPointerDown={(e) => {
+                    // Only start scrub if NOT clicking on a clip (clips call stopPropagation)
+                    isScrubbingRef.current = true;
+                    scrubStartXRef.current = e.clientX;
+                    scrubStartTimeRef.current = reviewVideoRef.current?.currentTime ?? reviewCurrentTime;
+                    if (reviewVideoRef.current && !reviewVideoRef.current.paused) {
+                      reviewVideoRef.current.pause();
+                    }
+                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!isScrubbingRef.current || dragState) return;
+                    const duration = reviewVideoRef.current?.duration || recordingTime || 10;
+                    const deltaX = scrubStartXRef.current - e.clientX;
+                    const newTime = Math.max(0, Math.min(
+                      scrubStartTimeRef.current + deltaX / 90,
+                      duration
+                    ));
+                    if (reviewVideoRef.current) reviewVideoRef.current.currentTime = newTime;
+                    setReviewCurrentTime(newTime);
+                  }}
+                  onPointerUp={() => { isScrubbingRef.current = false; }}
+                  onPointerLeave={() => { isScrubbingRef.current = false; }}
+                >
+                  {/* Inner translating track */}
+                  <div
+                    className="absolute top-0 bottom-0"
+                    style={{
+                      left: `calc(50% - ${reviewCurrentTime * pxPerSec}px)`,
+                      width: `${timelineWidth}px`,
+                      transition: (dragState || isScrubbingRef.current) ? 'none' : 'left 0.08s linear',
+                    }}
+                    onPointerMove={handleTimelinePointerMove}
+                    onPointerUp={handleTimelinePointerUp}
+                    onPointerLeave={handleTimelinePointerUp}
+                  >
+                    {/* Time ruler */}
+                    <div className="absolute top-0 left-0 w-full h-6 border-b border-white/5 pointer-events-none">
+                      {ticks.map((sec) => (
+                        <div
+                          key={sec}
+                          className="absolute bottom-0 flex flex-col items-center"
+                          style={{ left: `${sec * pxPerSec}px` }}
+                        >
+                          <span className="text-[8px] font-mono text-white/30 mb-0.5 -translate-x-1/2 select-none">
+                            {String(Math.floor(sec / 60)).padStart(2,'0')}:{String(sec % 60).padStart(2,'0')}
+                          </span>
+                          <div className="w-px h-1.5 bg-white/10" />
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Clip track */}
+                    <div className="absolute left-0 w-full" style={{ top: '26px', height: '48px' }}>
+                      {alignedWords.map((w, idx) => {
+                        const left   = w.start * pxPerSec;
+                        const width  = Math.max((w.end - w.start) * pxPerSec, 18);
+                        const isSelected = selectedWordIndex === idx;
+                        const isPlaying  = reviewCurrentTime >= w.start && reviewCurrentTime < w.end;
+
+                        return (
+                          <div
+                            key={idx}
+                            data-clip="true"
+                            onPointerDown={(e) => handleTimelinePointerDown(e, idx, 'move')}
+                            onClick={(e) => { e.stopPropagation(); setSelectedWordIndex(idx); }}
+                            className="absolute flex items-stretch cursor-grab pointer-events-auto overflow-hidden"
+                            style={{
+                              left:  `${left}px`,
+                              width: `${width}px`,
+                              height: '38px',
+                              top:   '5px',
+                              borderRadius: '6px',
+                              backgroundColor: isSelected ? '#f97316' : isPlaying ? '#6366f1' : '#374151',
+                              outline: isSelected ? '2px solid rgba(255,255,255,0.6)' : isPlaying ? '1.5px solid #818cf8' : 'none',
+                            }}
+                          >
+                            {/* Left handle */}
+                            <div
+                              onPointerDown={(e) => handleTimelinePointerDown(e, idx, 'resize-start')}
+                              className="flex-shrink-0 flex items-center justify-center cursor-col-resize pointer-events-auto"
+                              style={{
+                                width: isSelected ? '14px' : '5px',
+                                background: isSelected ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.12)',
+                                borderRadius: '6px 0 0 6px',
+                              }}
+                            >
+                              {isSelected && (
+                                <div className="flex gap-[2px]">
+                                  <div style={{ width:'1.5px', height:'10px', background:'#374151', borderRadius:'1px' }} />
+                                  <div style={{ width:'1.5px', height:'10px', background:'#374151', borderRadius:'1px' }} />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Label */}
+                            <span className="flex-1 flex items-center justify-center text-white font-semibold truncate select-none"
+                              style={{ fontSize: '10px', padding: '0 3px' }}>
+                              {w.word}
+                            </span>
+
+                            {/* Right handle */}
+                            <div
+                              onPointerDown={(e) => handleTimelinePointerDown(e, idx, 'resize-end')}
+                              className="flex-shrink-0 flex items-center justify-center cursor-col-resize pointer-events-auto"
+                              style={{
+                                width: isSelected ? '14px' : '5px',
+                                background: isSelected ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.12)',
+                                borderRadius: '0 6px 6px 0',
+                              }}
+                            >
+                              {isSelected && (
+                                <div className="flex gap-[2px]">
+                                  <div style={{ width:'1.5px', height:'10px', background:'#374151', borderRadius:'1px' }} />
+                                  <div style={{ width:'1.5px', height:'10px', background:'#374151', borderRadius:'1px' }} />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Fixed playhead at center */}
+                  <div className="absolute top-0 bottom-0 pointer-events-none z-20"
+                    style={{ left: '50%', transform: 'translateX(-50%)' }}>
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2"
+                      style={{ width:0, height:0, borderLeft:'5px solid transparent', borderRight:'5px solid transparent', borderTop:'8px solid #ef4444' }} />
+                    <div className="absolute top-2 bottom-0 left-1/2 -translate-x-1/2 w-[1.5px] bg-red-500" />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Action Recorder Console & Review buttons Card */}
           <div className="glass-panel p-5 w-full max-w-full overflow-hidden flex flex-col gap-4 items-center justify-center relative z-20">
@@ -1286,19 +1662,172 @@ export default function RecorderComponent() {
               rows={5}
               className="w-full text-xs px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400 outline-none text-slate-800 leading-relaxed resize-none transition placeholder:text-slate-300"
             />
-            {lyricsText.trim() && (
+             {lyricsText.trim() && (
               <p className="text-[10px] text-slate-400 leading-relaxed">
-                ✨ <strong>{lyricsText.trim().split(/\s+/).length} words</strong> detected. AI will auto-sync after recording stops.
+                ✨ <strong>{lyricsText.trim().split(/\s+/).length} words</strong> detected.
               </p>
             )}
-            {alignedWords.length > 0 && !isSyncing && (
-              <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                <span className="text-xs text-emerald-700 font-semibold">
-                  {alignedWords.length} words synced ✓
+
+            {isTeleprompter && lyricsText.trim() && (
+              <div className="bg-slate-50 border border-slate-150 rounded-xl p-3 flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-slate-400 font-extrabold tracking-wider uppercase">
+                    Teleprompter Speed
+                  </span>
+                  <span className="text-[10px] font-mono text-indigo-650 bg-indigo-50 px-1.5 py-0.5 rounded font-black">
+                    {teleprompterSpeed} px/s
+                  </span>
+                </div>
+                <input 
+                  type="range"
+                  min={10}
+                  max={60}
+                  step={2}
+                  value={teleprompterSpeed}
+                  onChange={(e) => setTeleprompterSpeed(Number(e.target.value))}
+                  className="w-full h-1 bg-slate-250 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+                <span className="text-[9px] text-slate-400 leading-normal">
+                  Adjust to match your singing/reading tempo (Slow 15 - Fast 45).
                 </span>
               </div>
             )}
+            {recordingState === 'review' && recordedBlobHD && lyricsText.trim() && (
+              <button
+                type="button"
+                onClick={() => triggerLyricsAlignment(recordedBlobHD)}
+                disabled={isSyncing}
+                className="w-full py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-60 text-indigo-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                {alignedWords.length > 0 ? 'Re-sync / Re-transcribe Lyrics' : 'Sync Lyrics Now'}
+              </button>
+            )}
+
+            {alignedWords.length > 0 && !isSyncing && (() => {
+              // 1. Calculate active frame words (matching what is currently visible on screen)
+              const t = reviewCurrentTime;
+              const windowStart = Math.max(0, alignedWords.findIndex(w => w.end > t) - 1);
+              const windowWords = alignedWords.slice(windowStart, windowStart + 6);
+              
+              const activeWordIdxInWindow = windowWords.findIndex(w => t >= w.start && t < w.end);
+              const useSecondHalf = activeWordIdxInWindow >= 3;
+              const startOffset = useSecondHalf ? 3 : 0;
+              const activeFrameWords = windowWords.slice(startOffset, startOffset + 3).map(w => {
+                const originalIndex = alignedWords.findIndex(orig => orig.start === w.start && orig.word === w.word);
+                return { ...w, originalIndex };
+              }).filter(item => item.originalIndex !== -1);
+
+              // 2. Automatically resolve currently edited word (default to active playing word in frame)
+              const playingWord = activeFrameWords.find(w => t >= w.start && t < w.end);
+              const currentEditIdx = selectedWordIndex !== null && activeFrameWords.some(w => w.originalIndex === selectedWordIndex)
+                ? selectedWordIndex
+                : (playingWord ? playingWord.originalIndex : (activeFrameWords.length > 0 ? activeFrameWords[0].originalIndex : null));
+
+              return (
+                <div className="flex flex-col gap-3 w-full">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-xs text-emerald-700 font-semibold">
+                      {alignedWords.length} words synced ✓
+                    </span>
+                  </div>
+
+                  {/* Dynamic frame-words view */}
+                  {activeFrameWords.length > 0 && (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                        Words in Current Frame
+                      </span>
+                      <div className="flex gap-2 p-2 border border-slate-100 rounded-xl bg-slate-50/50 justify-center">
+                        {activeFrameWords.map((w) => {
+                          const isSelected = currentEditIdx === w.originalIndex;
+                          const isPlaying = t >= w.start && t < w.end;
+                          return (
+                            <button
+                              key={w.originalIndex}
+                              type="button"
+                              onClick={() => handleWordClick(w.originalIndex)}
+                              style={{ transition: 'all 0.15s ease' }}
+                              className={`text-xs px-3 py-1.5 rounded-lg border font-semibold flex-1 transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-600 border-indigo-650 text-white font-bold shadow-sm'
+                                  : isPlaying
+                                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700 font-bold ring-2 ring-indigo-500/10'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-650'
+                              }`}
+                            >
+                              {w.word}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Micro Adjusters for selected word */}
+                  {currentEditIdx !== null && alignedWords[currentEditIdx] && (() => {
+                    const w = alignedWords[currentEditIdx];
+                    return (
+                      <div className="p-3 bg-indigo-50/30 border border-indigo-100 rounded-xl flex flex-col gap-2.5">
+                        <div className="flex items-center justify-between border-b border-indigo-100/50 pb-1.5">
+                          <span className="text-xs font-bold text-indigo-950">
+                            Editing: "{w.word}"
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500">
+                            {w.start.toFixed(2)}s - {w.end.toFixed(2)}s
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          {/* Start time adjustment */}
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[9px] text-slate-400 font-bold uppercase">Start Time</span>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => adjustWordTime(currentEditIdx, 'start', -0.05)}
+                                className="flex-1 py-1 px-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-650 transition cursor-pointer"
+                              >
+                                -0.05
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => adjustWordTime(currentEditIdx, 'start', 0.05)}
+                                className="flex-1 py-1 px-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-650 transition cursor-pointer"
+                              >
+                                +0.05
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* End time adjustment */}
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[9px] text-slate-400 font-bold uppercase">End Time</span>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => adjustWordTime(currentEditIdx, 'end', -0.05)}
+                                className="flex-1 py-1 px-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-650 transition cursor-pointer"
+                              >
+                                -0.05
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => adjustWordTime(currentEditIdx, 'end', 0.05)}
+                                className="flex-1 py-1 px-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-650 transition cursor-pointer"
+                              >
+                                +0.05
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Card: Dimensions Picker */}
