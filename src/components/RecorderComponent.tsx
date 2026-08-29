@@ -3,10 +3,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { 
   Camera, Mic, Settings, Download, RotateCcw, Play, Pause, Square, 
-  Sparkles, Trash2, Video, Volume2, Monitor, RefreshCw, LayoutGrid
+  Sparkles, Trash2, Video, Volume2, Monitor, RefreshCw, LayoutGrid,
+  User, Cat, Dog, Smile, Sun, Snowflake, Film, Zap, Palette, SunMoon
 } from 'lucide-react';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
 import { drawBackground, drawCartoonBody, draw2DAvatar, AvatarType, BackgroundType, FaceData } from '../utils/avatarRenderer';
+
+export type CameraFilter = 'none' | 'pop' | 'bw' | 'cool' | 'chrome' | 'film' | 'warm' | 'tv' | 'leak' | 'touchup';
+
+const CAMERA_FILTERS: { value: CameraFilter; label: string; emoji: string }[] = [
+  { value: 'none', label: 'Normal', emoji: '🎬' },
+  { value: 'pop', label: 'Pop', emoji: '✨' },
+  { value: 'bw', label: 'B&W', emoji: '⚫' },
+  { value: 'cool', label: 'Cool', emoji: '❄️' },
+  { value: 'chrome', label: 'Chrome', emoji: '🌈' },
+  { value: 'film', label: 'Film', emoji: '🎞️' },
+  { value: 'warm', label: 'Warm', emoji: '☀️' },
+  { value: 'leak', label: 'Light Leak', emoji: '🔮' },
+  { value: 'tv', label: 'Vintage TV', emoji: '📺' },
+  { value: 'touchup', label: 'Touch Up', emoji: '🌸' },
+];
+
 
 type AspectRatio = '9:16' | '1:1' | '16:9' | '4:3';
 
@@ -37,6 +54,7 @@ export default function RecorderComponent() {
   const [recordedUrlSD, setRecordedUrlSD] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState<number>(0);
   const [showDownloadMenu, setShowDownloadMenu] = useState<boolean>(false);
+  const [cameraFilter, setCameraFilter] = useState<CameraFilter>('none');
 
 
   // Keep a ref in sync so the animation loop can read it without triggering re-mounts
@@ -243,6 +261,21 @@ export default function RecorderComponent() {
             canvas2D.height = targetSize.height;
           }
 
+          const getFilterString = (f: CameraFilter) => {
+            switch (f) {
+              case 'pop':     return 'contrast(1.25) saturate(1.35) brightness(1.04)';
+              case 'bw':      return 'grayscale(1) contrast(1.2) brightness(0.98)';
+              case 'cool':    return 'saturate(1.15) hue-rotate(-12deg) brightness(0.96) contrast(1.05)';
+              case 'chrome':  return 'contrast(1.35) saturate(1.4) brightness(0.98)';
+              case 'film':    return 'sepia(0.2) contrast(0.95) brightness(1.02) saturate(0.9)';
+              case 'warm':    return 'sepia(0.35) saturate(1.25) contrast(1.05) brightness(1.02)';
+              case 'tv':      return 'contrast(1.1) brightness(1.03) saturate(0.8) sepia(0.05)';
+              default:        return 'none';
+            }
+          };
+
+          ctx2D.filter = getFilterString(cameraFilter);
+
           // A helper function to draw the raw camera feed center-cropped
           const drawRawCamera = () => {
             ctx2D.save();
@@ -351,6 +384,36 @@ export default function RecorderComponent() {
                       avgEAR: avgEAR,
                       mar: smoothedMarRef.current!
                     };
+
+                    // Implement Touch Up / Skin Smoothing face mask overlay
+                    if (cameraFilter === 'touchup') {
+                      const faceOvalIndices = [
+                        10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378,
+                        400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21,
+                        54, 103, 67, 109
+                      ];
+                      
+                      ctx2D.save();
+                      ctx2D.beginPath();
+                      faceOvalIndices.forEach((idx, i) => {
+                        const p = landmarks[idx];
+                        const x = offsetX + (1 - p.x) * drawW;
+                        const y = offsetY + p.y * drawH;
+                        if (i === 0) ctx2D.moveTo(x, y);
+                        else ctx2D.lineTo(x, y);
+                      });
+                      ctx2D.closePath();
+                      ctx2D.clip();
+                      
+                      // Draw soft blurred skin at 45% opacity
+                      ctx2D.globalAlpha = 0.45;
+                      ctx2D.filter = 'blur(6px) contrast(1.02) brightness(1.02)';
+                      
+                      ctx2D.translate(targetSize.width, 0);
+                      ctx2D.scale(-1, 1);
+                      ctx2D.drawImage(video, offsetX, offsetY, drawW, drawH);
+                      ctx2D.restore();
+                    }
                   }
                 } else {
                   // Reset LERP refs when tracking is lost so it snaps cleanly next time
@@ -384,6 +447,43 @@ export default function RecorderComponent() {
               );
             }
           }
+
+          // 4. Draw camera filter specific overlays on top of everything
+          if (cameraFilter === 'tv') {
+            ctx2D.save();
+            ctx2D.filter = 'none'; // reset color filters for overlays
+            ctx2D.strokeStyle = 'rgba(0, 0, 0, 0.07)';
+            ctx2D.lineWidth = 1;
+            for (let y = 0; y < targetSize.height; y += 4) {
+              ctx2D.beginPath();
+              ctx2D.moveTo(0, y);
+              ctx2D.lineTo(targetSize.width, y);
+              ctx2D.stroke();
+            }
+
+            // CRT curved lens dark vignette overlay
+            const grad = ctx2D.createRadialGradient(
+              targetSize.width / 2, targetSize.height / 2, targetSize.width * 0.45,
+              targetSize.width / 2, targetSize.height / 2, targetSize.width * 0.7
+            );
+            grad.addColorStop(0, 'rgba(0,0,0,0)');
+            grad.addColorStop(1, 'rgba(0,0,0,0.45)');
+            ctx2D.fillStyle = grad;
+            ctx2D.fillRect(0, 0, targetSize.width, targetSize.height);
+            ctx2D.restore();
+          } else if (cameraFilter === 'leak') {
+            ctx2D.save();
+            ctx2D.filter = 'none';
+            ctx2D.globalCompositeOperation = 'screen';
+            const grad = ctx2D.createLinearGradient(0, 0, targetSize.width, targetSize.height);
+            grad.addColorStop(0, 'rgba(249, 115, 22, 0.25)'); // Orange light leak
+            grad.addColorStop(0.3, 'rgba(236, 72, 153, 0.15)'); // Pink
+            grad.addColorStop(0.7, 'rgba(99, 102, 241, 0.08)');  // Indigo
+            grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx2D.fillStyle = grad;
+            ctx2D.fillRect(0, 0, targetSize.width, targetSize.height);
+            ctx2D.restore();
+          }
         }
       }
 
@@ -407,7 +507,7 @@ export default function RecorderComponent() {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
     };
-  }, [aspectRatio, avatarType, backgroundType]);
+  }, [aspectRatio, avatarType, backgroundType, cameraFilter]);
 
   // Start countdown before recording
   const initiateRecording = () => {
@@ -951,11 +1051,38 @@ export default function RecorderComponent() {
             </div>
           </div>
 
+          {/* Card: Camera Filters & Effects */}
+          <div className="glass-panel p-5 flex flex-col gap-4">
+            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+              <Video className="w-4 h-4 text-indigo-500" />
+              3. Camera Filters & Effects
+            </h2>
+            <div className="grid grid-cols-2 gap-2">
+              {CAMERA_FILTERS.map((f) => {
+                const active = cameraFilter === f.value;
+                return (
+                  <button
+                    key={f.value}
+                    onClick={() => setCameraFilter(f.value)}
+                    className={`py-2 px-2.5 rounded-xl border text-left flex items-center gap-2 transition ${
+                      active 
+                        ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold' 
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <span className="text-lg">{f.emoji}</span>
+                    <span className="text-[11px] uppercase tracking-wide">{f.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Card: Input Devices Settings */}
           <div className="glass-panel p-5 flex flex-col gap-4">
             <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
               <Settings className="w-4 h-4 text-indigo-500" />
-              3. Input Devices
+              4. Input Devices
             </h2>
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
